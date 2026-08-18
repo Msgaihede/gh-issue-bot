@@ -64,9 +64,11 @@ public static class IssueBodyComposer
 
     /// <summary>
     /// Characters that would let interpolated text escape the markdown built around it: out of an image
-    /// link, out of a code span, or into raw HTML.
+    /// link, out of a code span, or into raw HTML. The backslash is first and is not optional — without
+    /// it, an attacker-supplied backslash is emitted raw in front of the one we prepend, the pair renders
+    /// as a single literal backslash, and the character it was meant to neutralize is armed again.
     /// </summary>
-    private static readonly char[] MarkdownSpecials = ['[', ']', '(', ')', '`', '<'];
+    private static readonly char[] MarkdownSpecials = ['\\', '[', ']', '(', ')', '`', '<'];
 
     /// <summary>
     /// Escapes text the bot did not author before it is interpolated into markdown. Discord file names and

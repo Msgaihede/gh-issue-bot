@@ -69,6 +69,19 @@ public class IssueBodyComposerTests
     }
 
     [Fact]
+    public void A_backslash_cannot_re_arm_the_character_after_it()
+    {
+        // Left unescaped, an attacker's backslash lands in front of the one Escape prepends; the pair
+        // renders as a single literal backslash and the "<" behind it is armed again — and GitHub renders
+        // <a href> as a live link.
+        var body = IssueBodyComposer.ComposeIssueBody(
+            "B", """\<a href="https://evil.example">x\</a>""", [], [], null);
+
+        Assert.Contains(
+            """_Reported by **\\\<a href="https://evil.example">x\\\</a>** via Discord._""", body);
+    }
+
+    [Fact]
     public void Comment_body_never_has_regression_line()
     {
         var body = IssueBodyComposer.ComposeCommentBody("B", "u",
