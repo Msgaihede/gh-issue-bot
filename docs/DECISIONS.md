@@ -212,7 +212,10 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     entity types this service owns, leaving the cache byte-for-byte as it was
     before the sync started — on the cancellation path too, which rolls back
     before rethrowing, since a cancelled host may still reuse the context to
-    finish the in-flight interaction. Verified with a flaky embedder plus an
+    finish the in-flight interaction. *(Revised 2026-08-18 — see decision 41:
+    the rollback now covers the failed tail only. Batches the sync already
+    flushed are `Unchanged` and stay, which is the point of the batching; the
+    watermark still does not move, so they are re-checked on the next pass.)* Verified with a flaky embedder plus an
     unrelated `PendingReport` save on the same context, and pinned in the
     committed suite by `Cancellation_propagates_and_leaves_no_half_written_rows_tracked`.
 
