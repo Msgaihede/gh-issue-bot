@@ -75,9 +75,12 @@ issues are also announced publicly in the app's configured channel(s).
 
 Between the modal submit and that final click the draft (with the downloaded
 screenshot bytes) lives in SQLite for **one hour**; an hourly background pass
-sweeps expired rows, and a click on an older message answers "this report
-session has expired". Clicking a button also strips the buttons off the
-message it was clicked on, so the same draft cannot be submitted twice.
+sweeps expired rows, and a click on an older message answers "that report is
+no longer waiting". Clicking a button also strips the buttons off the message
+it was clicked on, and the confirming click claims the draft in the database
+before it touches GitHub, so the same report cannot be filed twice even if two
+clicks land at the same instant. A confirmation that fails — GitHub down, say —
+gives the claim back, so the draft and its buttons still work for a retry.
 
 ## Slash commands
 
@@ -218,7 +221,10 @@ the guild's **only** configured app.
    exists on GitHub with both screenshots rendering inline in the body, a
    `bug` label, and a `_Reported by **<you>** via Discord._` footer; a public
    announcement naming the app, the issue and the reporter appears in the
-   app's configured channel(s); and everything you saw in the command
+   app's configured channel(s), showing both screenshots as a media gallery
+   under the text (on a **private** repository the images are behind
+   authentication, so expect the gallery to come up blank there); and
+   everything you saw in the command
    channel was ephemeral ("Only you can see this") — the invoker's messages
    never post publicly.
 3. **Duplicate path.** Report the same bug again with different wording. The
