@@ -53,6 +53,31 @@ public class BotOptionsTests
         Assert.Contains(o.Validate(), e => e.Contains("Repo"));
     }
 
+    [Theory]
+    [InlineData(" owner/repo")]
+    [InlineData("owner/repo\n")]
+    [InlineData("\t owner/repo \r\n")]
+    public void Repo_is_trimmed_on_assignment(string configured)
+    {
+        var o = Valid();
+        o.Apps[0].Repo = configured;
+
+        Assert.Empty(o.Validate());
+        Assert.Equal("owner/repo", o.Apps[0].Repo);
+        Assert.NotNull(o.AppByRepo("owner/repo"));
+    }
+
+    [Fact]
+    public void A_repo_bound_from_a_secret_file_is_trimmed_too()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Apps:0:Repo"] = " owner/repo\n",
+        }).Build();
+
+        Assert.Equal("owner/repo", config.Get<BotOptions>()!.Apps[0].Repo);
+    }
+
     [Fact]
     public void Duplicate_repo_is_reported()
     {

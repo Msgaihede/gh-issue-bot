@@ -45,6 +45,18 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task AddComment_fails_when_github_returns_no_comment_url()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Post, "repos/owner/repo/issues/7/comments", HttpStatusCode.Created, """{"id":1}""");
+        var svc = new GitHubService(fake.CreateClient());
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => svc.AddCommentAsync(App, 7, "hello"));
+
+        Assert.Contains("owner/repo#7", ex.Message);
+    }
+
+    [Fact]
     public async Task ListIssues_filters_pull_requests_and_maps_fields()
     {
         var fake = new FakeHttpMessageHandler();

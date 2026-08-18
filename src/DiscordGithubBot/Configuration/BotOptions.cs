@@ -21,8 +21,18 @@ public sealed class AppConfig
 {
     public string Name { get; set; } = "";
 
-    /// <summary>GitHub repository in "owner/repo" form.</summary>
-    public string Repo { get; set; } = "";
+    private string _repo = "";
+
+    /// <summary>
+    /// GitHub repository in "owner/repo" form. Trimmed on assignment, so the trailing newline a Docker
+    /// secret file carries — or a stray leading space in an env var — cannot turn every GitHub call into
+    /// a 404 that validation happily passed.
+    /// </summary>
+    public string Repo
+    {
+        get => _repo;
+        set => _repo = value?.Trim() ?? "";
+    }
 
     public string GitHubToken { get; set; } = "";
     public List<ulong> GuildIds { get; set; } = new();

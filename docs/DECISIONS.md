@@ -613,3 +613,26 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     private-repo install should expect blank thumbnails until it is verified
     against a real private repo (the manual checklist is the place for that).
 
+54. **`AppConfig.Repo` trims on assignment.** Every config source that is a file
+    or an environment variable can carry stray whitespace — a Docker secret
+    written by `echo` ends in a newline, and a hand-edited `.env` picks up
+    leading spaces. `" owner/repo"` passed validation (it splits into two
+    non-blank halves) and then produced `GET repos/ owner/repo/issues`, a 404 on
+    every call with nothing in the logs pointing at the config. Trimming in the
+    setter rather than in `Validate` means the value is clean everywhere it is
+    read — the repo key, the API paths, the `AppByRepo` lookup — no matter which
+    layer supplied it. Only `Repo` is trimmed: it is the one field whose
+    whitespace is silently fatal rather than merely untidy.
+
+55. **`AddCommentAsync` fails when GitHub returns no `html_url`.** It used to
+    fall back to `""`, which meant the reporter was told "Added your report to
+    [#7]()" — a confirmation with a dead link, and a success as far as the
+    pipeline was concerned, so the pending report was deleted. A response
+    without the field is one we do not understand, so it is now an
+    `HttpRequestException`, which reaches the component handler's generic
+    apology and (since decision 49) releases the claim so the draft survives.
+    The trade-off is the one decision 27 already accepts: if GitHub really did
+    post the comment and only the response was malformed, a retry posts it
+    twice. A duplicate comment is recoverable; a lost report with a broken link
+    is not.
+

@@ -49,7 +49,11 @@ public sealed class GitHubService(HttpClient http) : IGitHubService
         using var resp = await SendAsync(
             app, HttpMethod.Post, $"repos/{app.Repo}/issues/{issueNumber}/comments",
             new CreateCommentPayload(body), ct);
-        return (await ReadJsonAsync<CommentDto>(resp, ct)).HtmlUrl ?? "";
+        // A comment with no html_url is a GitHub response we do not understand. Returning "" would put an
+        // empty link in front of the reporter and report success; failing here reaches the retry instead.
+        return (await ReadJsonAsync<CommentDto>(resp, ct)).HtmlUrl
+            ?? throw new HttpRequestException(
+                $"GitHub accepted the comment on {app.Repo}#{issueNumber} but returned no html_url.");
     }
 
     public async Task<IReadOnlyList<GitHubIssue>> ListIssuesAsync(
