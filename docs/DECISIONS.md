@@ -100,3 +100,43 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     upload is a new file (no existing-blob SHA needed), and file names are
     reduced to ASCII letters, digits, `.`, `-`, `_` so the URL never needs
     escaping.
+
+## 2026-08-18 (AI services)
+
+15. **Normalization retries thrown calls too, but never cancellation.** The
+    task contract specified a retry when the structured-output layer returns
+    no result or a blank title; the retry also covers an exception from the
+    chat client, because a transient 429/500 is the likeliest real first-attempt
+    failure and the caller's contract is simply "throws
+    `NormalizationException` after one retry". `OperationCanceledException` is
+    rethrown before that catch, so a cancelled request is never retried nor
+    disguised as a normalization failure. Both services read model output with
+    `ChatResponse<T>.TryGetResult`, never `.Result`: malformed output is an
+    expected case with a defined fallback, not an exception.
+
+16. **Every duplicate-judge failure degrades to Uncertain over all
+    candidates, in ranked order.** Unparseable output, a thrown call, an
+    unknown verdict string, and a `match` naming an issue number that was
+    never offered all map to `Uncertain` over the full input list — asking the
+    reporter beats guessing, and the hallucinated-number check keeps a
+    confident-sounding wrong answer from creating a comment on an unrelated
+    issue. For an `uncertain` verdict the shortlist is computed as
+    `inputNumbers.Where(modelNumbers.Contains)`, which preserves the
+    vector-ranked input order rather than the model's emission order, so the
+    reporter sees the most similar issue first; an empty intersection falls
+    back to all candidates. `CandidateNumbers` is left empty for `Match` and
+    `NoMatch`, matching the contract's documentation of the field as the
+    numbers worth showing when the verdict is `Uncertain` — for a match the
+    number is already in `IssueNumber`.
+
+17. **Normalizer prompt preserves facts and translates to English.** Beyond
+    the required per-type section lists and the 80-character imperative title
+    rule, the prompt tells the model to preserve the reporter's facts exactly
+    and correct only grammar, spelling, and structure, and to translate a
+    non-English report into English. Discord reporters write in whatever
+    language they please while the repositories' issues are English; pairing
+    the translation instruction with an explicit "never invent details …
+    omit that whole section rather than guessing" keeps rewriting from
+    drifting into authoring. Prompt inputs are bounded — raw report to 4000
+    characters, each candidate body excerpt to 1000 — so a pasted log cannot
+    blow the context budget.
