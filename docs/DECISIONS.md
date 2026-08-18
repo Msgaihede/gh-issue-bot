@@ -208,3 +208,56 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     finish the in-flight interaction. Verified with a flaky embedder plus an
     unrelated `PendingReport` save on the same context, and pinned in the
     committed suite by `Cancellation_propagates_and_leaves_no_half_written_rows_tracked`.
+
+## 2026-08-18 (report pipeline)
+
+23. **Pending reports expire on read as well as on the maintenance pass, and
+    the read that finds an expired row deletes it.** `PendingReportStore.GetAsync`
+    treats anything older than an hour as gone even though `CleanupExpiredAsync`
+    will remove it eventually: a report is only ever read because a reporter
+    clicked a button on an old ephemeral message, and the hourly sweep may not
+    have run since. Enforcing the lifetime at the only place it matters means a
+    stale draft can never be resurrected by a late click, and reaping the row on
+    the way out keeps a repeatedly-clicked dead message from accumulating.
+
+24. **Deleting a pending report is one SQL statement and relies on the schema's
+    cascade for the attachment rows.** `ExecuteDeleteAsync` never loads the
+    entities, which matters because every `PendingAttachment` carries a
+    screenshot's bytes — loading a report just to throw it away would pull
+    megabytes through the change tracker. The dependent rows go with the parent
+    via the `ON DELETE CASCADE` that EF writes into the SQLite schema
+    (Microsoft.Data.Sqlite turns the foreign-keys pragma on by default). That is
+    a real dependency rather than an assumption, so it is pinned by the test
+    `Deleting_a_report_takes_its_attachment_blobs_with_it`, which fails loudly if
+    the pragma or the cascade ever stops holding instead of quietly leaking blobs.
+    Candidates are read with `AsNoTracking().Include(...)` for the same economy:
+    callers only ever read the draft and its bytes.
+
+25. **The pending report stores the whole ranked shortlist, not just the
+    candidates the verdict routed on.** `CandidatesJson` is written from all
+    (up to five) ranked issues even when the verdict is Match or NoMatch, because
+    the reporter's next click can change the flow — "none of these" after an
+    Uncertain, or "this is not a duplicate" — and the alternative is a second
+    embedding + ranking pass to rebuild a list we already had. It costs a few
+    hundred bytes per pending row, all of which is deleted within the hour.
+
+26. **A verdict the judge should not be able to produce degrades instead of
+    throwing.** `DuplicateJudge` already guarantees that a Match names an issue
+    it was offered and that Uncertain lists a subset of those numbers, so both
+    guards in `ReportPipeline.Route` are for contract violations, not expected
+    paths: a Match on an unknown number falls back to Uncertain over the whole
+    shortlist (ask the reporter rather than link an issue we cannot show), and an
+    Uncertain whose numbers match nothing falls back to NoMatch (an "is it one of
+    these?" prompt with nothing to choose from is a dead end for the reporter).
+    Both are logged as warnings and both are covered by tests, so the fallbacks
+    stay honest rather than becoming dead code.
+
+27. **The pending report is deleted only after GitHub accepts the issue or
+    comment.** `CreateIssueAsync` and `AddCommentAsync` call `store.DeleteAsync`
+    after the GitHub call returns, so a failed call leaves the draft, its
+    attachments and its one-hour window intact and the reporter can press the
+    button again. The screenshots are re-uploaded on that retry, which can leave
+    an orphaned asset behind — a far cheaper failure than losing the report.
+    Uploads run sequentially rather than in parallel: it is a handful of images
+    against one repository, and the gallery then keeps the order the reporter
+    attached them in.
