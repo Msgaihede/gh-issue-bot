@@ -28,3 +28,7 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 - Never hotlink Discord CDN URLs in GitHub issue bodies.
 - float[] embeddings map to BLOB via a ValueConverter + ValueComparer (both required).
 - All interaction replies are ephemeral; only issue creations post publicly.
+- Components V2 messages carry all their text inside the payload — never pass
+  `text:` together with `components:`, Discord rejects the combination.
+- Interaction handlers are `RunMode.Sync` on purpose: BotService owns the
+  per-interaction DI scope and detaches the dispatch onto its own task itself.

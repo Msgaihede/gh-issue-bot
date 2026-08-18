@@ -261,3 +261,68 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     Uploads run sequentially rather than in parallel: it is a handful of images
     against one repository, and the gallery then keeps the order the reporter
     attached them in.
+
+28. **The app is chosen with a slash-command option, not a select menu inside
+    the modal.** The design spec sketched an app selector as the modal's first
+    row. It is implemented as an optional `app` option on `/report-issue`,
+    `/request-feature` and `/issues` instead: the chosen repository then rides
+    along in the modal's custom id, which leaves the modal as a single
+    description field plus the file upload, and leaves the submit handler with
+    no state to look up. Guilds with one configured app never see the option
+    at all, and naming an unknown app answers with the valid names.
+    `AppResolution` is a plain static class rather than a private method so the
+    three rules (no app / named app / several apps) can be unit-tested.
+
+29. **Components V2 messages carry all of their text inside the payload.**
+    Discord rejects a message that sets both the CV2 flag and message content,
+    so nothing in the Discord layer ever passes `text:` together with
+    `components:`. The skipped-attachment warning and the flow headings became
+    optional `notice`/`heading` arguments on the renderers rather than a
+    leading line of message content — a deviation from the task brief's sketch,
+    which passed the notice as `text`. Discord.Net 3.20.1 sets
+    `MessageFlags.ComponentsV2` by itself on `RespondAsync`, `FollowupAsync`
+    and `SendMessageAsync` when the payload contains a V2 component, but *not*
+    on `IComponentInteraction.UpdateAsync`, which is the one place the flag is
+    passed explicitly. Two further names differ from the brief's sketch: the
+    fluent `WithContainer`/`WithTextDisplay`/`WithActionRow`/`WithButton`/
+    `WithSelectMenu` calls are extension methods in `ComponentContainerExtensions`
+    rather than members of the builders, and the optional file upload needs
+    `[RequiredInput(false)]` next to `[ModalFileUpload]` for Discord to accept
+    a submit with no screenshots.
+
+30. **Every interaction runs on its own task, in its own DI scope, with the
+    handler running inline.** `BotService` injects `IServiceScopeFactory` and
+    gives each interaction a fresh async scope instead of handing the
+    interaction framework the root provider: `IReportPipeline` and the database
+    context are scoped services, and resolving them from the root would share
+    one change tracker across every reporter. The scope may only be disposed
+    once the handler is done, which is why every command carries
+    `runMode: RunMode.Sync` — Discord.Net's default `RunMode.Async` detaches
+    the handler onto its own task and returns immediately, which would dispose
+    the scope out from under a report that is still running. Running inline
+    would instead block the gateway's event loop, so `BotService` does the
+    detaching itself: it starts the whole dispatch on a `Task.Run` and returns
+    to the gateway at once. The next reporter's three-second acknowledgement
+    window therefore never queues behind someone else's model calls.
+
+31. **A clicked message loses its buttons before the slow work starts.** Every
+    component handler answers the interaction by *updating* the message it was
+    clicked on into a "working on it" note with no components, which both meets
+    the three-second deadline and makes a second click on that message
+    impossible. If Discord refuses the update the handler falls back to a plain
+    ephemeral defer and logs it, so the click is still acknowledged. Two clicks
+    landing at the same instant can still both get through; the pipeline settles
+    that race by itself, because the first one to finish deletes the pending
+    report and the second then fails with `ExpiredPendingReportException`, which
+    every handler turns into the "this report session has expired" reply.
+
+32. **The Discord layer answers with words, never with a stack trace.**
+    `ExpiredPendingReportException` and `NormalizationException` are the two
+    typed failures with something to say to a reporter, so they get their own
+    ephemeral messages; anything else is logged at error level and answered with
+    a generic apology. `BotService` adds a last line of defence for interactions
+    the framework could not route at all — a button left over from an older
+    version of the bot — so no click is ever left hanging as "interaction
+    failed". Announcements are the one exception that stays quiet: a channel
+    that no longer exists is a warning in the log, never an error the reporter
+    sees, because the issue already exists by then.

@@ -21,14 +21,15 @@ issues are also announced publicly in the app's configured channel(s).
 
 ## The report workflow
 
-1. **Modal.** The reporter runs `/report-issue` or `/request-feature`. A
-   modal opens with an app selector (only shown when the guild maps to more
-   than one app), a multiline description field, and an optional file upload
-   for up to 10 screenshots.
-2. **Immediate download, then defer.** On submit, the bot downloads any
+1. **Modal.** The reporter runs `/report-issue` or `/request-feature`,
+   naming the app with the optional `app` option when the guild maps to more
+   than one. A modal opens with a multiline description field and an
+   optional file upload for up to 10 screenshots.
+2. **Defer, then immediate download.** On submit, the bot acknowledges the
+   interaction ephemerally (Discord allows three seconds) and downloads any
    attached image bytes right away — Discord's CDN URLs expire in about 24
-   hours — then defers the interaction ephemerally; everything from here on
-   stays private to the reporter until an issue is actually created.
+   hours. Everything from here on stays private to the reporter until an
+   issue is actually created.
 3. **Normalize.** The raw text goes to the chat model (`gpt-5.6-luna`), which
    produces a structured `{title, body}` draft from a bug or feature
    template and credits the reporting Discord user. It never invents facts
@@ -58,12 +59,15 @@ issues are also announced publicly in the app's configured channel(s).
 
 ## Slash commands
 
-- **`/report-issue`** — opens the bug-report modal described above.
-- **`/request-feature`** — same flow, using the feature-request template and
-  the `enhancement` label instead of `bug`.
-- **`/issues [app]`** — an ephemeral, paginated list of the target repo's
-  open issue titles with links. The `app` parameter is only asked for when
-  the guild maps to more than one configured app.
+- **`/report-issue [app]`** — opens the bug-report modal described above.
+- **`/request-feature [app]`** — same flow, using the feature-request
+  template and the `enhancement` label instead of `bug`.
+- **`/issues [app]`** — an ephemeral list of the target repo's open issue
+  titles with links, capped at 25 with a "+K more on GitHub" note.
+
+The `app` option is only needed when the guild maps to more than one
+configured app; with a single app it is ignored, and naming an unknown one
+answers with the valid names.
 
 ## Configuration
 
