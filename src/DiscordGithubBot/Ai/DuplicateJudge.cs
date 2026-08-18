@@ -54,7 +54,9 @@ public sealed class DuplicateJudge(IChatClient chat, ILogger<DuplicateJudge> log
                 "The duplicate judge returned unparseable output; treating all {Count} candidates as uncertain.",
                 numbers.Count);
         }
-        catch (OperationCanceledException)
+        // Only a genuine cancellation of *our* token escapes: an HttpClient or OpenAI timeout also
+        // surfaces as a TaskCanceledException, and that is an ordinary failure to degrade over.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }

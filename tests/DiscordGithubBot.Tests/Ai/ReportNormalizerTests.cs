@@ -41,6 +41,32 @@ public class ReportNormalizerTests
     }
 
     [Fact]
+    public async Task Http_timeout_counts_as_a_failed_attempt_and_is_retried()
+    {
+        // The OpenAI client reports its own timeout as a TaskCanceledException even though nobody
+        // cancelled; an unguarded catch would let it escape past the retry.
+        var chat = new TimingOutChatClient("""{"title":"T","body":"B"}""");
+        var sut = new ReportNormalizer(chat, NullLogger<ReportNormalizer>.Instance);
+
+        var draft = await sut.NormalizeAsync(ReportType.Bug, "MyApp", "raw", CancellationToken.None);
+
+        Assert.Equal("T", draft.Title);
+        Assert.Equal(2, chat.Prompts.Count);
+    }
+
+    [Fact]
+    public async Task Cancellation_of_our_own_token_still_propagates()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var chat = new TimingOutChatClient("""{"title":"T","body":"B"}""");
+        var sut = new ReportNormalizer(chat, NullLogger<ReportNormalizer>.Instance);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.NormalizeAsync(ReportType.Bug, "MyApp", "raw", cts.Token));
+    }
+
+    [Fact]
     public async Task Bug_and_feature_prompts_differ()
     {
         var chat = new FakeChatClient("""{"title":"T","body":"B"}""");

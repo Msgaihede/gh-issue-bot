@@ -59,7 +59,9 @@ public sealed class ReportNormalizer(IChatClient chat, ILogger<ReportNormalizer>
                 logger.LogWarning(
                     "Normalization attempt {Attempt} for {App} produced no usable draft.", attempt, appName);
             }
-            catch (OperationCanceledException)
+            // Only a genuine cancellation of *our* token escapes: an HttpClient or OpenAI timeout also
+            // surfaces as a TaskCanceledException, and that is an ordinary failed attempt to retry.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }

@@ -418,3 +418,21 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     is safe in both places. APP.md's Docker section states the same rule
     explicitly instead of claiming that everything in `.env.example` works in a
     container unchanged.
+
+## 2026-08-18 (final review fixes)
+
+40. **Both AI services guard their cancellation catch on our own token.**
+    `ReportNormalizer` and `DuplicateJudge` caught `OperationCanceledException`
+    and rethrew it unconditionally, which was wrong for the same reason
+    decision 21 gives for the sync service: `HttpClient` and the OpenAI client
+    report *their own* timeout as a `TaskCanceledException` with nobody's token
+    cancelled. An unguarded catch therefore turned a routine model timeout into
+    an escaping exception that skipped the very fallbacks these two classes
+    exist for — the normalizer's retry and the judge's degrade-to-Uncertain —
+    and surfaced to the reporter as the generic apology. Both now read
+    `catch (OperationCanceledException) when (ct.IsCancellationRequested)`, so a
+    timeout falls through to the ordinary `catch (Exception)` and a real
+    shutdown still propagates. `TimingOutChatClient` (first call throws
+    `TaskCanceledException("timeout", new TimeoutException())`, later calls
+    answer normally) pins both halves in each suite.
+

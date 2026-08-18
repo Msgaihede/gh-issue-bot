@@ -1,6 +1,7 @@
 using DiscordGithubBot.Ai;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.Tests.TestDoubles;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DiscordGithubBot.Tests.Ai;
@@ -13,7 +14,7 @@ public class DuplicateJudgeTests
         ContentHash = "h", BodyExcerpt = $"body {n}",
     };
 
-    private static DuplicateJudge Sut(FakeChatClient chat) => new(chat, NullLogger<DuplicateJudge>.Instance);
+    private static DuplicateJudge Sut(IChatClient chat) => new(chat, NullLogger<DuplicateJudge>.Instance);
     private static readonly IssueDraft Draft = new("T", "B");
 
     [Fact]
@@ -58,6 +59,30 @@ public class DuplicateJudgeTests
         var v = await Sut(chat).JudgeAsync(Draft, [Candidate(7), Candidate(9)]);
         Assert.Equal(VerdictKind.Uncertain, v.Kind);
         Assert.Equal([7, 9], v.CandidateNumbers);
+    }
+
+    [Fact]
+    public async Task Http_timeout_degrades_to_uncertain_over_all()
+    {
+        // The OpenAI client reports its own timeout as a TaskCanceledException even though nobody
+        // cancelled; an unguarded catch would let it escape instead of degrading.
+        var chat = new TimingOutChatClient("""{"verdict":"no_match"}""");
+
+        var v = await Sut(chat).JudgeAsync(Draft, [Candidate(7), Candidate(9)], CancellationToken.None);
+
+        Assert.Equal(VerdictKind.Uncertain, v.Kind);
+        Assert.Equal([7, 9], v.CandidateNumbers);
+    }
+
+    [Fact]
+    public async Task Cancellation_of_our_own_token_still_propagates()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var chat = new TimingOutChatClient("""{"verdict":"no_match"}""");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Sut(chat).JudgeAsync(Draft, [Candidate(7)], cts.Token));
     }
 
     [Fact]
