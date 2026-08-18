@@ -32,6 +32,20 @@ public class ImageUploaderTests
     }
 
     [Fact]
+    public async Task A_parameterized_content_type_still_uses_the_unofficial_endpoint()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Post, "uploads.github.com/user-attachments/assets", HttpStatusCode.OK,
+            """{"href":"https://github.com/user-attachments/assets/abc-123"}""");
+        fake.When(HttpMethod.Get, "repos/owner/repo", HttpStatusCode.OK, """{"id":1,"default_branch":"main"}""");
+
+        var result = await Uploader(fake).UploadAsync(App, "shot.png", "image/png; charset=utf-8", [1]);
+
+        Assert.Equal("https://github.com/user-attachments/assets/abc-123", result!.Url);
+        Assert.DoesNotContain(fake.Requests, r => r.Url.Contains("contents/issue-assets"));
+    }
+
+    [Fact]
     public async Task Falls_back_to_contents_api_when_unofficial_endpoint_fails()
     {
         var fake = new FakeHttpMessageHandler();

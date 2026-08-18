@@ -481,3 +481,14 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     model's own markdown and exists to render — and neither is the image URL,
     for the reason decision 18 gives. Escaping is applied at interpolation time
     rather than at storage time so the stored draft stays the reporter's text.
+
+44. **The upload content type is parsed, not constructed.**
+    `new MediaTypeHeaderValue(contentType)` throws on anything but a bare media
+    type, and Discord attachments regularly carry parameters
+    (`image/png; charset=utf-8`). The throw happened inside the tier-1 `try`,
+    so it did not lose the screenshot — it silently sent every such upload down
+    the Contents API fallback, permanently darkening the tier the whole design
+    prefers and leaving a commit on `issue-assets` for each one.
+    `MediaTypeHeaderValue.Parse` accepts the parameterized form, and a genuinely
+    malformed value still throws into the same fallback as before.
+

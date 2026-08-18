@@ -76,7 +76,10 @@ public sealed class GitHubImageUploader(HttpClient http, ILogger<GitHubImageUplo
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", app.GitHubToken);
         req.Content = new ByteArrayContent(bytes);
-        req.Content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        // Parse, not the constructor: Discord reports content types with parameters
+        // ("image/png; charset=utf-8"), and the constructor rejects anything but a bare media type —
+        // which would have sent every such screenshot down the tier-2 fallback for no reason.
+        req.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
 
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
