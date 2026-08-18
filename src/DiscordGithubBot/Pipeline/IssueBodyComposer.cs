@@ -48,15 +48,45 @@ public static class IssueBodyComposer
         {
             AppendBlock(sb, "### Screenshots");
             foreach (var image in images)
-                sb.Append('\n').Append($"![{image.FileName}]({image.Url})");
+                sb.Append('\n').Append($"![{Escape(image.FileName)}]({image.Url})");
         }
 
         if (failedUploads.Count > 0)
-            AppendBlock(sb, $"> [!NOTE]\n> Screenshot upload failed for: {string.Join(", ", failedUploads)}.");
+            AppendBlock(
+                sb,
+                "> [!NOTE]\n> Screenshot upload failed for: " +
+                $"{string.Join(", ", failedUploads.Select(Escape))}.");
 
-        AppendBlock(sb, $"---\n_Reported by **{reporterDisplayName}** via Discord._");
+        AppendBlock(sb, $"---\n_Reported by **{Escape(reporterDisplayName)}** via Discord._");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Characters that would let interpolated text escape the markdown built around it: out of an image
+    /// link, out of a code span, or into raw HTML.
+    /// </summary>
+    private static readonly char[] MarkdownSpecials = ['[', ']', '(', ')', '`', '<'];
+
+    /// <summary>
+    /// Escapes text the bot did not author before it is interpolated into markdown. Discord file names and
+    /// display names are attacker-chosen — a screenshot called <c>x](http://evil)![</c> otherwise rewrites
+    /// the image link built around it. The draft body is deliberately left alone: it is the model's own
+    /// markdown and is meant to render. Image URLs are left alone too; they come from our own upload step,
+    /// and escaping them would corrupt legitimate links.
+    /// </summary>
+    private static string Escape(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+
+        foreach (var c in value)
+        {
+            if (c is '\r' or '\n') { sb.Append(' '); continue; }
+            if (MarkdownSpecials.Contains(c)) sb.Append('\\');
+            sb.Append(c);
+        }
+
+        return sb.ToString().Trim();
     }
 
     /// <summary>Appends a block, separated from anything already written by one blank line.</summary>

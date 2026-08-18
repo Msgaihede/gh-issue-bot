@@ -149,10 +149,13 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     which keeps the output snapshot-testable. Section blocks are joined by a
     single blank line through one private `AppendBlock` helper, and the draft
     is trimmed and skipped when empty so a body never opens with blank lines.
-    Image `FileName`/`Url` are interpolated into `![name](url)` without
-    markdown escaping: both values originate from our own upload step
-    (Task 6), which controls the names and returns GitHub-hosted URLs, and
-    escaping them would corrupt legitimate URLs for no gain.
+    Image `Url` is interpolated into `![name](url)` without markdown escaping:
+    it comes from our own upload step (Task 6), which returns a GitHub-hosted
+    URL, and escaping it would corrupt legitimate links for no gain. *(Revised
+    2026-08-18 — see decision 43: this entry originally claimed the same about
+    `FileName`, which was wrong. The upload step controls the URL, not the
+    name: `FileName` is whatever the reporter called their screenshot in
+    Discord, and it is now escaped.)*
 
 ## 2026-08-18 (issue sync)
 
@@ -461,3 +464,20 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     values, which `HostSetupTests` proves by resolving `IIssueSyncService` from
     a real container.
 
+43. **The body composer escapes every string it did not author.** Decision 18
+    justified passing image names through verbatim on the grounds that "our own
+    upload step controls the names". That was false: `UploadedImage.FileName` is
+    the reporter's Discord attachment name, echoed straight back by the
+    uploader, and `failedUploads` carries the same names for the screenshots
+    that never made it. `ReporterDisplayName` is a Discord display name and is
+    just as attacker-chosen. A screenshot called
+    `x](http://evil)![` therefore rewrote the markdown image link built around
+    it — the same class of bug `OutcomeRenderer.Inline` already guarded against
+    on the Discord side. A private `Escape` helper now backslash-escapes
+    `[`, `]`, `(`, `)`, the backtick and `<`, and folds CR/LF to a space, in
+    image names, failed-upload names and the reporter name. `>` is deliberately not escaped: with newlines gone,
+    a `>` cannot open a blockquote, and escaping it made ordinary names like
+    `<v2>` uglier for nothing. The draft body is *not* escaped — it is the
+    model's own markdown and exists to render — and neither is the image URL,
+    for the reason decision 18 gives. Escaping is applied at interpolation time
+    rather than at storage time so the stored draft stays the reporter's text.

@@ -42,6 +42,33 @@ public class IssueBodyComposerTests
     }
 
     [Fact]
+    public void Image_names_cannot_break_out_of_their_markdown_link()
+    {
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u",
+            [new UploadedImage("shot](http://evil)![x\n<b>`.png", "https://x/a")], [], null);
+
+        Assert.Contains(
+            @"![shot\]\(http://evil\)!\[x \<b>\`.png](https://x/a)", body);
+        Assert.DoesNotContain("](http://evil)", body); // no second link to escape into
+    }
+
+    [Fact]
+    public void Failed_upload_names_cannot_break_out_of_their_note()
+    {
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", [], ["a](x).png", "b`.png"], null);
+
+        Assert.Contains(@"a\]\(x\).png, b\`.png", body);
+    }
+
+    [Fact]
+    public void The_reporter_name_cannot_break_out_of_the_footer()
+    {
+        var body = IssueBodyComposer.ComposeIssueBody("B", "ev[il](http://evil)\nx", [], [], null);
+
+        Assert.Contains(@"_Reported by **ev\[il\]\(http://evil\) x** via Discord._", body);
+    }
+
+    [Fact]
     public void Comment_body_never_has_regression_line()
     {
         var body = IssueBodyComposer.ComposeCommentBody("B", "u",
