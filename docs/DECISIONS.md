@@ -326,3 +326,37 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     failed". Announcements are the one exception that stays quiet: a channel
     that no longer exists is a warning in the log, never an error the reporter
     sees, because the issue already exists by then.
+
+## 2026-08-18 (host wiring)
+
+33. **The embedding dimension is passed to the generator, not merely assumed.**
+    The host registers
+    `AsIEmbeddingGenerator(VectorRanker.EmbeddingDimensions)` rather than
+    letting `text-embedding-3-small` supply its own default, because
+    `VectorRanker.TopK` silently skips any cached vector whose length differs
+    from the query's: a model or default that changed the dimension would not
+    fail loudly, it would quietly return zero duplicate candidates and turn
+    every report into a new issue. Passing the one constant is what makes
+    decision 7's "fixed in exactly one constant" true at the only point where
+    the number leaves the process.
+
+34. **The image uploader is a typed `HttpClient` and stays transient.**
+    `AddHttpClient<IImageUploader, GitHubImageUploader>` registers the
+    implementation transiently, so `GitHubImageUploader`'s repository-id cache
+    is not shared process-wide. That is deliberate rather than accepted: the
+    only consumer, `ReportPipeline`, is scoped and injects the uploader once,
+    so a single instance serves every screenshot in a report and the
+    repository id is fetched once per report instead of once per image —
+    which is where that cache earns its keep. Promoting the uploader to a
+    singleton to widen the cache would pin one pooled `HttpMessageHandler` for
+    the life of the process and defeat `IHttpClientFactory`'s handler
+    rotation, a real cost for an optimisation worth one GET per report.
+
+35. **`InteractionService` is built from `BotService.CreateConfig()`.** The
+    host composes no `InteractionServiceConfig` of its own. The Discord
+    layer's contract (decision 30) is that handlers run inline under
+    `RunMode.Sync` so `BotService` can own each interaction's DI scope, and
+    `CreateConfig()` is the single place that setting lives; a hand-rolled
+    `new InteractionServiceConfig { UseCompiledLambda = true }` at the
+    registration would silently restore Discord.Net's default
+    `RunMode.Async` and dispose every scope out from under a running report.
