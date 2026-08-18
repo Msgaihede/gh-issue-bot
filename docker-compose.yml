@@ -1,0 +1,23 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DOTNET_ENVIRONMENT: Production
+    volumes:
+      - botdata:/data
+    secrets:
+      - Discord__Token
+      - OpenAI__ApiKey
+
+volumes:
+  botdata:
+
+secrets:
+  Discord__Token:
+    file: ./secrets/Discord__Token
+  OpenAI__ApiKey:
+    file: ./secrets/OpenAI__ApiKey

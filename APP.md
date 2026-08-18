@@ -116,6 +116,28 @@ shell (or use a tool that loads `.env` files) before running —
 `appsettings.json` ships with safe, secret-free defaults, so local runs just
 need the Discord token, OpenAI key, and per-app GitHub tokens from elsewhere.
 
-`docker compose up` runs it in Docker instead: `docker-compose.yml` wires an
-`env_file: .env` and/or Docker secrets for the Discord token, OpenAI key, and
-GitHub PATs, and mounts a named volume for the SQLite database directory.
+## Running in Docker
+
+`docker compose up --build` runs the bot in a container: the image is a
+multi-stage build (SDK to publish, runtime to run) that runs as the image's
+non-root `app` user and reads `Database__Path=/data/app.db`, with the named
+`botdata` volume mounted at `/data` so the SQLite file survives rebuilds.
+
+Secrets reach the container two ways, and you can mix them:
+
+- **`.env`** — copy `.env.example` to `.env` and fill it in; compose loads it
+  if it exists and ignores it if it doesn't (`required: false`). Everything
+  in `.env.example` works here, including `Apps__0__GitHubToken`.
+- **Docker secrets** — files under `secrets/` (gitignored), mounted at
+  `/run/secrets` and read key-per-file, so they win over everything else.
+  The file *name* is the config key with `__` for nesting:
+  `secrets/Discord__Token`, `secrets/OpenAI__ApiKey`, and, if you want the
+  per-app GitHub PATs out of `.env` too, `secrets/Apps__0__GitHubToken`
+  (one file per app index) — add each new file to both the service's
+  `secrets:` list and the top-level `secrets:` block.
+
+Compose only creates the secret files it is told about, and it **fails to
+start if a referenced secret file is missing**. So the shipped
+`docker-compose.yml` is a starting point, not a requirement: if you keep
+everything in `.env`, delete the service-level `secrets:` list and the
+top-level `secrets:` block entirely.

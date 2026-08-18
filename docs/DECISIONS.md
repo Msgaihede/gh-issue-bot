@@ -360,3 +360,26 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     `new InteractionServiceConfig { UseCompiledLambda = true }` at the
     registration would silently restore Discord.Net's default
     `RunMode.Async` and dispose every scope out from under a running report.
+
+## 2026-08-18 (docker)
+
+36. **`.dockerignore` excludes build output by glob, not by top-level name.**
+    `bin/` and `obj/` in a `.dockerignore` only match at the context root,
+    which would let the *host's* `src/DiscordGithubBot/obj/` into the build
+    context — and a `project.assets.json` generated on Windows carries
+    Windows package paths that break the image's `dotnet publish --no-restore`.
+    The file therefore uses `**/bin/` and `**/obj/`. `.superpowers/` is
+    excluded for the same reason the other tooling directories are: nothing
+    outside `src/` and the two project files is needed to build the bot, and
+    every excluded path is one less cache-busting change to the context.
+
+37. **Compose secret names are the config keys, and the blocks are optional.**
+    Each entry under `secrets:` is named exactly as the KeyPerFile provider
+    will read it (`Discord__Token`, `OpenAI__ApiKey`), because the file name
+    *is* the configuration key — renaming a secret silently stops overriding
+    anything. Only the two always-needed secrets ship in the file; per-app
+    GitHub PATs (`Apps__0__GitHubToken`) are equally valid as secret files
+    but are left to `.env` by default, since their count varies per install.
+    Compose refuses to start when a referenced secret file is missing, so
+    APP.md tells `.env`-only users to delete both `secrets:` blocks rather
+    than create empty placeholder files.
