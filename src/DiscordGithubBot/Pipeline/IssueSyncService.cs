@@ -26,8 +26,16 @@ public interface IIssueSyncService
 public sealed class IssueSyncService(
     BotDbContext db, IGitHubService gitHub,
     IEmbeddingGenerator<string, Embedding<float>> embedder,
-    ILogger<IssueSyncService> logger) : IIssueSyncService
+    ILogger<IssueSyncService> logger,
+    int saveBatchSize = IssueSyncService.DefaultSaveBatchSize) : IIssueSyncService
 {
+    /// <summary>
+    /// How many upserted issues are flushed at a time. A first sync of a busy repository is hundreds of
+    /// embedding calls long, and without an intermediate flush a rate limit near the end would throw away
+    /// every vector bought so far. The batch is only ever a save, never the watermark.
+    /// </summary>
+    public const int DefaultSaveBatchSize = 25;
+
     /// <summary>How long a closed issue stays a dedup candidate before it is pruned.</summary>
     private const int CandidateWindowDays = 30;
 
@@ -55,14 +63,26 @@ public sealed class IssueSyncService(
                 .Where(e => e.RepoKey == repoKey && numbers.Contains(e.IssueNumber))
                 .ToDictionaryAsync(e => e.IssueNumber, ct);
 
+            var sinceLastSave = 0;
             foreach (var issue in issues)
+            {
                 await UpsertAsync(repoKey, issue, rows, ct);
+
+                // Flushed mid-loop so a failure part-way through keeps the issues already embedded;
+                // RepoSyncState is untouched here, so no partial pass can advance the watermark.
+                if (++sinceLastSave < saveBatchSize) continue;
+
+                await db.SaveChangesAsync(ct);
+                sinceLastSave = 0;
+            }
 
             if (state is null)
                 db.RepoSyncStates.Add(new RepoSyncState { RepoKey = repoKey, LastSyncUtc = syncStartUtc });
             else
                 state.LastSyncUtc = syncStartUtc;
 
+            // The watermark moves only here, once every issue in the window is embedded and stored:
+            // a sync that failed half way must be repeated in full, not skipped as already done.
             await db.SaveChangesAsync(ct);
             logger.LogDebug("Synced {Count} issue(s) for {Repo}.", issues.Count, repoKey);
         }

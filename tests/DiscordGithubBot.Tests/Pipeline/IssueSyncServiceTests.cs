@@ -126,6 +126,27 @@ public sealed class IssueSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_failed_cold_sync_keeps_the_batches_it_finished_but_not_the_watermark()
+    {
+        var embedder = new FailingEmbedder(failOnCall: 3);
+        var sut = new IssueSyncService(
+            _db, _gitHub, embedder, NullLogger<IssueSyncService>.Instance, saveBatchSize: 2);
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
+            .Returns([Issue(1), Issue(2), Issue(3), Issue(4)]);
+
+        await sut.SyncAsync(App); // swallowed by contract
+
+        Assert.Equal([1, 2], _db.IssueEmbeddings.Select(e => e.IssueNumber).OrderBy(n => n).ToArray());
+        Assert.Null(_db.RepoSyncStates.Find("owner/repo")); // the window must be retried in full
+
+        embedder.Healthy = true;
+        await sut.SyncAsync(App);
+
+        Assert.Equal([1, 2, 3, 4], _db.IssueEmbeddings.Select(e => e.IssueNumber).OrderBy(n => n).ToArray());
+        Assert.NotNull(_db.RepoSyncStates.Find("owner/repo"));
+    }
+
+    [Fact]
     public async Task Cancellation_propagates_and_leaves_no_half_written_rows_tracked()
     {
         using var cts = new CancellationTokenSource();
@@ -137,6 +158,26 @@ public sealed class IssueSyncServiceTests : IDisposable
         Assert.DoesNotContain(_db.ChangeTracker.Entries(), e => e.State == EntityState.Added);
         await _db.SaveChangesAsync();
         Assert.Empty(_db.IssueEmbeddings);
+    }
+
+    /// <summary>Fails the nth embedding call the way a rate-limited endpoint would, until healed.</summary>
+    private sealed class FailingEmbedder(int failOnCall) : IEmbeddingGenerator<string, Embedding<float>>
+    {
+        private readonly FakeEmbeddingGenerator _inner = new();
+        private int _calls;
+
+        public bool Healthy { get; set; }
+
+        public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
+            IEnumerable<string> values, EmbeddingGenerationOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Healthy && ++_calls == failOnCall) throw new HttpRequestException("429 Too Many Requests");
+            return _inner.GenerateAsync(values, options, cancellationToken);
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 
     /// <summary>Cancels mid-sync, after the first row has been added to the change tracker.</summary>

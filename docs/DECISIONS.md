@@ -436,3 +436,28 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     `TaskCanceledException("timeout", new TimeoutException())`, later calls
     answer normally) pins both halves in each suite.
 
+41. **A cold sync flushes every 25 issues; the watermark still moves only on a
+    complete pass.** The first sync of an established repository is hundreds of
+    embedding calls long, and the single `SaveChangesAsync` at the end meant a
+    rate limit on the last issue threw away every vector already paid for — and
+    then did it again on the next attempt. `SyncAsync` now calls
+    `SaveChangesAsync` every `DefaultSaveBatchSize` (25) upserts inside the
+    loop. `RepoSyncState` is deliberately *not* touched in that loop: the
+    watermark is still written once, after the whole window succeeded, so a
+    half-finished pass is repeated in full rather than skipped as done. The
+    cost of a repeat is nil, because an issue whose content hash already
+    matches is not re-embedded. `RollbackPendingChanges` keeps its meaning for
+    the tail: rows saved by an earlier batch are `Unchanged` and untouched,
+    only the failed tail is detached or reverted.
+
+42. **The batch size is a constructor parameter with a default rather than a
+    private const.** `IssueSyncService(..., int saveBatchSize =
+    DefaultSaveBatchSize)` is the one test-only seam in the class. The
+    alternative — a private const and a 30-issue fixture to cross the
+    boundary — makes the test about arithmetic instead of about the behaviour,
+    and it would silently stop covering anything if the constant changed. The
+    default keeps production and DI untouched: `Microsoft.Extensions.
+    DependencyInjection` fills parameters it cannot resolve from their default
+    values, which `HostSetupTests` proves by resolving `IIssueSyncService` from
+    a real container.
+
