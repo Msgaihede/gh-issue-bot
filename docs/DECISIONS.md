@@ -111,7 +111,10 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     failure and the caller's contract is simply "throws
     `NormalizationException` after one retry". `OperationCanceledException` is
     rethrown before that catch, so a cancelled request is never retried nor
-    disguised as a normalization failure. Both services read model output with
+    disguised as a normalization failure. *(Revised 2026-08-18 — see decision
+    40: that rethrow is now guarded on `ct.IsCancellationRequested`, because a
+    client-side timeout arrives as a `TaskCanceledException` with nothing
+    cancelled and is an ordinary failed attempt, not a cancellation.)* Both services read model output with
     `ChatResponse<T>.TryGetResult`, never `.Result`: malformed output is an
     expected case with a defined fallback, not an exception.
 
@@ -636,3 +639,43 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     twice. A duplicate comment is recoverable; a lost report with a broken link
     is not.
 
+## 2026-08-18 (adjudicated spec drifts)
+
+Two places where the implementation knowingly departs from the design spec.
+Both were reviewed against the spec's own constraints and kept; recording them
+here so the next reader does not "fix" the code back to the letter of a
+document that contradicts itself.
+
+56. **The modal handler defers *before* downloading attachments, reversing the
+    spec's step 2.** The spec's report-pipeline step 2 reads "download
+    attachment bytes immediately (Discord CDN URLs expire ~24 h), then
+    `DeferAsync(ephemeral: true)`". Taken literally that loses the interaction:
+    Discord gives an interaction three seconds to be acknowledged, and
+    downloading up to ten images over the network is exactly the kind of work
+    that blows through it — after which the defer fails and the reporter sees
+    "This interaction failed" with their typed-out report gone. The spec's own
+    error-handling section states the governing rule, "defer before slow work;
+    every failure path ends in an ephemeral message — never a hung
+    interaction", so the two clauses conflict and the deadline wins. The
+    concern behind the spec's ordering is honoured all the same: the download
+    is still the *first* thing after the defer and long before any model call,
+    and the ~24 h CDN expiry is nowhere near a three-second acknowledgement.
+    `OnReportModal` therefore reads `DeferAsync` → `DownloadAsync` →
+    pipeline.
+
+57. **`/issues` shows the first 25 open issues plus a "+K more on GitHub" line,
+    not a paginated list.** The spec's Discord-layer section asks for an
+    "ephemeral paginated list of open issue titles linking to GitHub".
+    Pagination means stateful buttons: a page cursor in every custom id, or a
+    server-side cursor with its own TTL and cleanup, plus handlers for an
+    interaction that Discord expires after 15 minutes — for a read-only
+    convenience view of data that is one click away on GitHub itself, already
+    linked from every line. The cap is not arbitrary: 25 is Discord's own limit
+    for select options and the number `OutcomeRenderer` already uses for the
+    duplicate shortlist, so the two lists agree. Lines are dropped whole rather
+    than cut, and everything not shown is counted into a single
+    "+K more on GitHub" line, so the reporter is never misled into thinking
+    they are seeing everything. If a repository routinely has more than 25 open
+    issues *and* the list is being used to triage rather than to check "is this
+    known", pagination is the right follow-up — the renderer is a pure function
+    and the change would be local to it.
