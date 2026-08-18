@@ -18,7 +18,6 @@ public sealed class BotService(
     DiscordSocketClient client,
     InteractionService interactions,
     IServiceScopeFactory scopeFactory,
-    IServiceProvider rootServices,
     BotOptions options,
     ILogger<BotService> logger) : BackgroundService
 {
@@ -40,9 +39,12 @@ public sealed class BotService(
         client.Log += LogAsync;
         interactions.Log += LogAsync;
 
-        // Module discovery happens once and its results outlive every interaction, so it reads from the
-        // root provider rather than from a scope that is about to be disposed.
-        await interactions.AddModulesAsync(typeof(BotService).Assembly, rootServices);
+        // Discovery happens once and its results outlive every interaction, but Discord.Net *instantiates*
+        // each module while building it, so it needs a provider the module's scoped dependencies can be
+        // resolved from — the root provider throws under scope validation. The scope is disposed as soon
+        // as the build is done; only the reflected metadata is kept.
+        using (var buildScope = scopeFactory.CreateScope())
+            await interactions.AddModulesAsync(typeof(BotService).Assembly, buildScope.ServiceProvider);
 
         client.Ready += OnReadyAsync;
         client.InteractionCreated += OnInteractionCreatedAsync;

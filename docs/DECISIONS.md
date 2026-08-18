@@ -517,3 +517,28 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     the problem the second call fails too, and an unhandled throw there would
     only be caught by `BotService` and logged a third way.
 
+47. **Module discovery runs inside a DI scope, even though Discord.Net 3.20.1
+    does not currently need it.** `BotService` handed `AddModulesAsync` the root
+    provider, reasoning that discovery outlives every interaction. That confuses
+    the *metadata* (which does outlive them) with the *instance* Discord.Net
+    creates while building a module so it can call `OnModuleBuilding`.
+    `ReportInteractionModule` takes the scoped `IReportPipeline`, and
+    constructing it from the root provider under `ValidateScopes` throws — which
+    `HostSetupTests` now pins directly with `ActivatorUtilities.CreateInstance`.
+    Measured honestly: on Discord.Net 3.20.1 the root-provider call *does not*
+    throw today, so this is a latent bug rather than a live one; discovery
+    evidently does not construct the module on this version. The fix is taken
+    anyway because it is free — one scope, disposed the moment discovery
+    returns, in a `using` block rather than a method-lifetime `using var` so it
+    does not hold a `BotDbContext` open for the process's life — and because
+    nothing about the module's shape guarantees the current behaviour survives
+    an upgrade or the first `OnModuleBuilding` override. `IServiceProvider
+    rootServices` left the constructor with the last use of it.
+
+48. **`HostSetupTests` builds its container with `ValidateOnBuild` as well as
+    `ValidateScopes`.** Scope validation catches a singleton capturing a scoped
+    service; build validation catches a constructor parameter nothing
+    registers, at build time rather than on the first interaction at three in
+    the morning. Both are green, so both stay on, and the two module tests
+    share one `BuildProvider` helper so no test can quietly opt out of a guard.
+
