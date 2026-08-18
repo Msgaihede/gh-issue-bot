@@ -56,3 +56,9 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     issue posts a public announcement in the app's configured channel(s);
     adding a comment to an existing issue only confirms ephemerally to the
     reporter and does not post publicly.
+
+## 2026-08-18 (scaffold follow-up)
+
+11. Pinned `OpenAI` down from 2.13.0 to 2.12.0 to stay within
+    `Microsoft.Extensions.AI.OpenAI` 10.9.0's declared dependency range
+    (`>= 2.12.0 && < 2.13.0`); NU1608 hygiene — builds must be warning-free.
