@@ -73,3 +73,30 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     sequence-equality `ValueComparer<float[]>` — without the comparer, EF
     change tracking would treat the mutable array by reference and miss
     in-place edits.
+
+## 2026-08-18 (image uploader)
+
+13. **`issue-assets` branches from the default branch's HEAD, not orphaned.**
+    The design spec called for an orphan `issue-assets` branch, but the REST
+    API cannot create one: `POST /git/refs` requires a starting SHA. Creating
+    a true orphan would mean hand-building an empty tree and a parentless
+    commit through the git-data API — three extra calls for a fallback path
+    that only stores screenshots. The branch is therefore created from the
+    default branch's HEAD (`GET /git/ref/heads/{default}` → `POST /git/refs`),
+    which costs one duplicated history and nothing else.
+
+14. **Lenient parsing of the unofficial upload response.** The
+    `uploads.github.com/user-attachments/assets` response is undocumented and
+    unversioned, so the URL is located rather than deserialized: `href`,
+    `url`, `asset_url` are checked first, then any root-level string property
+    containing `user-attachments/assets`. Any tier-1 failure — non-2xx,
+    exception, or a body with no recognizable URL — is logged at warning level
+    and falls through to the Contents API; only both tiers failing is an error,
+    and then `UploadAsync` returns `null` so the caller notes the failure and
+    keeps going. Raw URLs are
+    `raw.githubusercontent.com/{owner}/{repo}/issue-assets/issue-assets/{file}`:
+    the repeated segment is the branch ref followed by the folder, both named
+    `issue-assets`. Upload paths get a `yyyyMMddHHmmssfff` prefix so every
+    upload is a new file (no existing-blob SHA needed), and file names are
+    reduced to ASCII letters, digits, `.`, `-`, `_` so the URL never needs
+    escaping.
