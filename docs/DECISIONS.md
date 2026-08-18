@@ -152,3 +152,51 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     markdown escaping: both values originate from our own upload step
     (Task 6), which controls the names and returns GitHub-hosted URLs, and
     escaping them would corrupt legitimate URLs for no gain.
+
+## 2026-08-18 (issue sync)
+
+19. **Repo keys are lowercased inside the sync service, on both the write and
+    the read side.** `IssueEmbedding.RepoKey` is documented as lowercase, but
+    callers hold an `AppConfig.Repo` written by hand in configuration and the
+    report pipeline passes that value straight to `GetCandidatesAsync`.
+    Normalizing in one place — `IssueEmbedding.RepoKey`, `RepoSyncState.RepoKey`
+    and the candidate lookup all go through the same helper — keeps a
+    `Owner/Repo` config entry from producing a cache that can never be read
+    back, without asking every caller to remember the convention. SQLite
+    compares TEXT case-sensitively by default, so this is what makes the
+    lookups reliable rather than a cosmetic detail.
+
+20. **The 30-day prune is a single repo-agnostic `ExecuteDeleteAsync`, and
+    candidates are read untracked.** The retention rule ("a closed issue stops
+    being a dedup candidate 30 days after it closed") is uniform across
+    repositories, so scoping the delete to the requested repo would only leave
+    other repos' rows to rot until someone happens to query them; the delete
+    also runs as one SQL statement rather than loading rows, which matters
+    because every row drags a 6 KB vector BLOB. `AsNoTracking()` on the
+    candidate query is the same economy: candidates are read-only inputs to
+    ranking and the judge, and tracking them would make the change tracker
+    snapshot-clone every vector.
+
+21. **Cancellation is rethrown, and the content hash advances only after the
+    vector it describes is in hand.** `SyncAsync` swallows GitHub and embedding
+    failures per the resilience decision, but `OperationCanceledException` is
+    rethrown ahead of that catch, matching the AI services (decision 15): a
+    cancelled sync is a shutting-down host, not a stale cache worth logging as
+    a warning. A new row is inserted with an empty `ContentHash` and both new
+    and changed rows get their hash set only inside the embedding step, so an
+    embedding that throws mid-batch leaves the row looking stale — the next
+    sync retries it instead of treating a vector-less row as up to date.
+
+22. **A failed sync rolls its own unsaved edits out of the change tracker.**
+    The `BotDbContext` is shared with the rest of the operation, so swallowing
+    an embedding failure while leaving half-written `IssueEmbedding` rows
+    tracked would hand the mess to the caller: their next `SaveChanges` would
+    flush the incomplete rows, and a retry of the sync would add a *second*
+    tracked insert for the same issue and break the unique
+    (`RepoKey`,`IssueNumber`) index — one failed sync poisoning the whole
+    context, the exact opposite of the swallow-and-continue contract. The
+    catch therefore detaches Added and reverts Modified entries for the two
+    entity types this service owns, leaving the cache byte-for-byte as it was
+    before the sync started. Verified with a throwaway test (a flaky embedder
+    followed by an unrelated `PendingReport` save on the same context); it is
+    not in the repo because the brief pins the committed test file verbatim.
