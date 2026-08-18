@@ -140,3 +140,15 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     drifting into authoring. Prompt inputs are bounded — raw report to 4000
     characters, each candidate body excerpt to 1000 — so a pasted log cannot
     blow the context budget.
+
+18. **Body composer emits `\n` line endings and passes image names/URLs
+    through verbatim.** `IssueBodyComposer` hard-codes `\n` rather than
+    `Environment.NewLine` so the same report produces byte-identical markdown
+    on Windows and Linux (GitHub normalizes either form, so nothing is lost),
+    which keeps the output snapshot-testable. Section blocks are joined by a
+    single blank line through one private `AppendBlock` helper, and the draft
+    is trimmed and skipped when empty so a body never opens with blank lines.
+    Image `FileName`/`Url` are interpolated into `![name](url)` without
+    markdown escaping: both values originate from our own upload step
+    (Task 6), which controls the names and returns GitHub-hosted URLs, and
+    escaping them would corrupt legitimate URLs for no gain.
