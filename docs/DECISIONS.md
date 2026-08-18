@@ -492,3 +492,28 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     `MediaTypeHeaderValue.Parse` accepts the parameterized form, and a genuinely
     malformed value still throws into the same fallback as before.
 
+45. **Every rendered Components V2 message is budgeted, not just the draft
+    body.** Discord rejects a CV2 message whose text runs past 4000 characters,
+    and a rejected message means the reporter sees nothing — strictly worse
+    than a truncated preview. Only the body was capped (3000); the draft title
+    and the skipped-attachments notice were interpolated whole, and both are
+    reporter- or model-supplied. `OutcomeRenderer` now caps the title at 150
+    (the prompt asks for 80, so this is the hard stop, not the target) and the
+    notice at 300 — enough for a handful of file names — and every text display
+    built by the `Render*` helpers goes through `Budgeted`, a final cut at 3800
+    that leaves headroom for the components wrapped around the text. The caps
+    compose: each part is cut on its own so no single runaway part can starve
+    the others out of the message.
+
+46. **A reply Discord refuses is logged as a delivery failure, not as a failed
+    report.** The modal handler wrapped `ProcessAsync` *and* the outcome
+    `FollowupAsync` in one `try`, so a payload Discord rejected was logged
+    "Report pipeline failed" — pointing whoever read the log at the pipeline
+    when the pipeline had in fact succeeded and saved the draft. The two are
+    now separate: the pipeline's catches return, and rendering and delivery
+    have their own catch that logs "Could not deliver the report outcome" and
+    answers with plain text, which is the one shape Discord cannot reject for
+    its structure. That fallback is itself wrapped, because if the gateway is
+    the problem the second call fails too, and an unhandled throw there would
+    only be caught by `BotService` and logged a third way.
+

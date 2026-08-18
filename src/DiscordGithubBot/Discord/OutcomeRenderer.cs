@@ -21,6 +21,20 @@ public static class OutcomeRenderer
     /// <summary>Draft bodies are cut here; Discord caps a whole CV2 message at 4000 characters.</summary>
     private const int MaxBodyChars = 3000;
 
+    /// <summary>
+    /// Whole-message budget. Discord rejects a Components V2 message whose text exceeds 4000 characters,
+    /// and every text display here is assembled from several capped parts, so the assembled result is cut
+    /// once more with headroom left for the components around it. A rejected message means the reporter
+    /// sees nothing at all, which is the one outcome worse than a truncated preview.
+    /// </summary>
+    private const int MaxMessageChars = 3800;
+
+    /// <summary>Model-authored titles are asked to stay under 80 characters; this is the hard cut.</summary>
+    private const int MaxTitleChars = 150;
+
+    /// <summary>Cut for the skipped-attachments notice, which is as long as the file names the reporter chose.</summary>
+    private const int MaxNoticeChars = 300;
+
     /// <summary>Discord's cap for a select option label, and a sane cut for a listed issue title.</summary>
     private const int MaxLabelChars = 100;
 
@@ -56,9 +70,9 @@ public static class OutcomeRenderer
     public static MessageComponent RenderDraftPreview(
         IssueDraft draft, Guid pendingId, int regressionOf = 0, string? heading = null, string? notice = null) =>
         Container(container => container
-            .WithTextDisplay(
+            .WithTextDisplay(Budgeted(
                 Notice(notice) + (heading is null ? "" : heading + "\n") +
-                $"**{Inline(draft.Title)}**\n{Truncate(draft.Body, MaxBodyChars)}")
+                $"**{Truncate(Inline(draft.Title), MaxTitleChars)}**\n{Truncate(draft.Body, MaxBodyChars)}"))
             .WithActionRow(row => row
                 .WithButton(ButtonBuilder.CreateSuccessButton(
                     "Create issue", CustomIds.Build(CustomIds.Create, pendingId, regressionOf)))
@@ -68,10 +82,10 @@ public static class OutcomeRenderer
     /// <summary>Public channel announcement for a created issue.</summary>
     public static MessageComponent RenderAnnouncement(
         CreatedIssueResult issue, string appName, string reporterDisplayName, ReportType type) =>
-        Container(container => container.WithTextDisplay(
+        Container(container => container.WithTextDisplay(Budgeted(
             $"**New {(type == ReportType.Bug ? "bug report" : "feature request")} for {Inline(appName)}**\n" +
             $"[#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})\n" +
-            $"Reported by {Inline(reporterDisplayName)} via Discord"));
+            $"Reported by {Inline(reporterDisplayName)} via Discord")));
 
     /// <summary>Ephemeral open-issues list for /issues.</summary>
     public static MessageComponent RenderIssueList(string appName, IReadOnlyList<GitHubIssue> issues)
@@ -97,7 +111,7 @@ public static class OutcomeRenderer
         if (hidden > 0) lines.Add($"+{hidden} more on GitHub");
 
         var body = lines.Count == 0 ? "No open issues 🎉" : string.Join("\n", lines);
-        return Container(container => container.WithTextDisplay($"{heading}\n{body}"));
+        return Container(container => container.WithTextDisplay(Budgeted($"{heading}\n{body}")));
     }
 
     /// <summary>
@@ -121,7 +135,7 @@ public static class OutcomeRenderer
 
     private static MessageComponent RenderMatchOpen(CandidateIssue match, Guid pendingId, string? notice) =>
         Container(container => container
-            .WithTextDisplay(Notice(notice) + $"**This looks like an existing issue:** {Link(match)}")
+            .WithTextDisplay(Budgeted(Notice(notice) + $"**This looks like an existing issue:** {Link(match)}"))
             .WithActionRow(row => row
                 .WithButton(ButtonBuilder.CreatePrimaryButton(
                     "Same issue — add my report", CustomIds.Build(CustomIds.Comment, pendingId, match.Number)))
@@ -130,9 +144,9 @@ public static class OutcomeRenderer
 
     private static MessageComponent RenderMatchClosed(CandidateIssue match, Guid pendingId, string? notice) =>
         Container(container => container
-            .WithTextDisplay(
+            .WithTextDisplay(Budgeted(
                 Notice(notice) + $"**This looks like {Link(match)}, closed recently.** " +
-                "Is it still happening in the latest version?")
+                "Is it still happening in the latest version?"))
             .WithActionRow(row => row
                 .WithButton(ButtonBuilder.CreatePrimaryButton(
                     "Still happening", CustomIds.Build(CustomIds.StillOpen, pendingId, match.Number)))
@@ -151,9 +165,9 @@ public static class OutcomeRenderer
             .ToList();
 
         return Container(container => container
-            .WithTextDisplay(
+            .WithTextDisplay(Budgeted(
                 Notice(notice) + "**This might match an existing issue.** " +
-                "Pick one to attach your report, or continue with a new issue.")
+                "Pick one to attach your report, or continue with a new issue."))
             .WithActionRow(row => row.WithSelectMenu(new SelectMenuBuilder()
                 .WithCustomId(CustomIds.Build(CustomIds.Pick, pendingId))
                 .WithPlaceholder("Pick the matching issue")
@@ -178,7 +192,10 @@ public static class OutcomeRenderer
         $"[#{candidate.Number} {Truncate(Inline(candidate.Title), MaxLabelChars)}]({candidate.Url})";
 
     private static string Notice(string? notice) =>
-        string.IsNullOrWhiteSpace(notice) ? "" : Inline(notice) + "\n";
+        string.IsNullOrWhiteSpace(notice) ? "" : Truncate(Inline(notice), MaxNoticeChars) + "\n";
+
+    /// <summary>Last cut before the text goes into a component, after every part has had its own.</summary>
+    private static string Budgeted(string text) => Truncate(text, MaxMessageChars);
 
     /// <summary>Keeps user- and model-authored text from breaking the surrounding Markdown link or line.</summary>
     private static string Inline(string value) =>

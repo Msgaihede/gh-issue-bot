@@ -37,6 +37,8 @@ public class ReportInteractionModule(
         "Something went wrong while processing your report. Please try again later.";
     private const string NormalizationErrorMessage =
         "Sorry — I couldn't process that report right now. Please try again.";
+    private const string RenderErrorMessage =
+        "I read your report but couldn't show you the result. Please run the command again.";
 
     // --- slash commands ---
 
@@ -96,23 +98,45 @@ public class ReportInteractionModule(
             ? null
             : $"⚠️ Skipped (not an image / too large / failed): {string.Join(", ", skipped)}";
 
+        ReportOutcome outcome;
         try
         {
-            var outcome = await pipeline.ProcessAsync(new ReportSubmission(
+            outcome = await pipeline.ProcessAsync(new ReportSubmission(
                 app, type, Context.User.Id, Context.User.GlobalName ?? Context.User.Username,
                 modal.Description, payloads));
-
-            await FollowupAsync(components: OutcomeRenderer.Render(outcome, notice), ephemeral: true);
         }
         catch (NormalizationException ex)
         {
             logger.LogWarning(ex, "Normalization failed for a report in {Repo}.", repo);
             await FollowupAsync(NormalizationErrorMessage, ephemeral: true);
+            return;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Report pipeline failed for {Repo}.", repo);
             await FollowupAsync(GenericErrorMessage, ephemeral: true);
+            return;
+        }
+
+        // Rendering and delivery sit outside the pipeline's catch on purpose: a payload Discord refuses
+        // is not a failed report, and logging it as one sends whoever reads the log after the wrong bug.
+        // The draft is saved either way, so the fallback reply says what actually happened.
+        try
+        {
+            await FollowupAsync(components: OutcomeRenderer.Render(outcome, notice), ephemeral: true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Could not deliver the report outcome for {Repo}.", repo);
+
+            try
+            {
+                await FollowupAsync(RenderErrorMessage, ephemeral: true);
+            }
+            catch (Exception fallbackEx)
+            {
+                logger.LogWarning(fallbackEx, "Could not deliver the fallback reply for {Repo} either.", repo);
+            }
         }
     }
 

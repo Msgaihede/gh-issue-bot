@@ -170,6 +170,53 @@ public class OutcomeRendererTests
     }
 
     [Fact]
+    public void A_runaway_draft_title_is_cut_to_its_own_cap()
+    {
+        var message = OutcomeRenderer.RenderDraftPreview(
+            new IssueDraft(new string('t', 500), "body"), PendingId);
+
+        var text = Text(message);
+        Assert.DoesNotContain(new string('t', 200), text);
+        Assert.Contains("body", text); // the body still made it past the title
+    }
+
+    [Fact]
+    public void A_runaway_skipped_files_notice_is_cut_to_its_own_cap()
+    {
+        var message = OutcomeRenderer.Render(
+            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), null, []),
+            "⚠️ Skipped: " + new string('f', 2000));
+
+        var text = Text(message);
+        Assert.True(text.Length <= 3800, $"draft preview grew to {text.Length} characters");
+        Assert.Contains("⚠️ Skipped:", text);
+        Assert.Contains("**t**", text); // the draft is still visible under the notice
+    }
+
+    [Fact]
+    public void No_rendered_message_can_exceed_the_whole_message_budget()
+    {
+        var huge = new string('x', 5000);
+        var candidates = new List<CandidateIssue> { new(7, huge, "open", "https://github.com/acme/mira/issues/7") };
+
+        MessageComponent[] messages =
+        [
+            OutcomeRenderer.RenderDraftPreview(new IssueDraft(huge, huge), PendingId, notice: huge),
+            OutcomeRenderer.RenderMatch(candidates[0], PendingId, huge),
+            OutcomeRenderer.RenderMatch(
+                new CandidateIssue(9, huge, "closed", "https://github.com/acme/mira/issues/9"), PendingId, huge),
+            OutcomeRenderer.Render(
+                new ReportOutcome(ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), null, candidates),
+                huge),
+            OutcomeRenderer.RenderAnnouncement(
+                new CreatedIssueResult(12, huge, "https://github.com/acme/mira/issues/12"), huge, huge, ReportType.Bug),
+        ];
+
+        Assert.All(messages, m => Assert.True(
+            Text(m).Length <= 3800, $"a rendered message grew to {Text(m).Length} characters"));
+    }
+
+    [Fact]
     public void The_working_placeholder_has_no_buttons_left_to_click()
     {
         var message = OutcomeRenderer.RenderWorking();
