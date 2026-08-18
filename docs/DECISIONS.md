@@ -481,11 +481,19 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     just as attacker-chosen. A screenshot called
     `x](http://evil)![` therefore rewrote the markdown image link built around
     it — the same class of bug `OutcomeRenderer.Inline` already guarded against
-    on the Discord side. A private `Escape` helper now backslash-escapes
-    `[`, `]`, `(`, `)`, the backtick and `<`, and folds CR/LF to a space, in
-    image names, failed-upload names and the reporter name. `>` is deliberately not escaped: with newlines gone,
-    a `>` cannot open a blockquote, and escaping it made ordinary names like
-    `<v2>` uglier for nothing. The draft body is *not* escaped — it is the
+    on the Discord side. A private `Escape` helper now backslash-escapes the
+    backslash itself, `[`, `]`, `(`, `)`, the backtick and `<`, and folds CR/LF
+    to a space, in image names, failed-upload names and the reporter name. The
+    backslash belongs in that set and its omission was a real hole for one
+    review round: escaping runs character by character, so an attacker's own
+    backslash was emitted raw immediately before the one `Escape` prepends, the
+    pair rendered as a single literal backslash, and the character behind it was
+    armed again — `\<a href="https://evil.example">click me\</a>` in a display
+    name came out as live HTML, which GitHub renders. Escaping the backslash
+    first closes it, because every later escape is then written behind an
+    already-neutralized one. `>` is deliberately *not* escaped: with newlines
+    gone, a `>` cannot open a blockquote, and escaping it made ordinary names
+    like `<v2>` uglier for nothing. The draft body is *not* escaped — it is the
     model's own markdown and exists to render — and neither is the image URL,
     for the reason decision 18 gives. Escaping is applied at interpolation time
     rather than at storage time so the stored draft stays the reporter's text.
