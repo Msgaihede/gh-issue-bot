@@ -19,7 +19,8 @@ one paragraph. Seeded from the design spec's "Decisions log" section
 3. **Two-tier image upload; never hotlink Discord CDN.** Screenshots try the
    unofficial `user-attachments` upload endpoint first (permanent URLs,
    renders inline on public and private repos), falling back to the official
-   Contents API on an orphan `issue-assets` branch if that fails. Discord CDN
+   Contents API on an `issue-assets` branch if that fails (the branch is not
+   orphaned — the REST API cannot create one; see decision 13). Discord CDN
    URLs expire after ~24h and are never embedded directly in issue bodies.
 
 4. **Apps are a list with a unique `Repo` key, not a dictionary.** A
@@ -383,3 +384,37 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     Compose refuses to start when a referenced secret file is missing, so
     APP.md tells `.env`-only users to delete both `secrets:` blocks rather
     than create empty placeholder files.
+
+## 2026-08-18 (documentation reconciliation)
+
+38. **`MaintenanceService.ExecuteAsync` swallows the guarded cancellation
+    instead of propagating it.** The plan's snippet let the shutdown
+    `OperationCanceledException` escape, which would leave the background
+    service's task in the `Canceled` state; the implemented loop wraps the
+    `PeriodicTimer` loop in
+    `catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)`
+    and returns, so the task completes `RanToCompletion` on shutdown. This was
+    reviewed and accepted rather than "fixed": under the Generic Host the two
+    are runtime-equivalent — `StopAsync` awaits the task and treats a
+    cancellation of its own stopping token as a clean stop either way, nothing
+    is logged differently, and no exit code changes. The guard is the point of
+    the shape and matches decision 21: only a cancellation of *our* token is
+    treated as shutdown, so a stray `TaskCanceledException` from inside a
+    cleanup pass still reaches the inner warning-level catch rather than
+    silently ending the sweep. The one theoretical cost is a future host (or
+    diagnostics) that distinguishes a cancelled hosted service from a completed
+    one; nothing observable today depends on it.
+
+39. **`.env.example` ships `Database__Path` commented out.** A `.env` copied
+    from the example and handed to compose sets *container* environment
+    variables, which override the image's `ENV Database__Path=/data/app.db`.
+    The previous example carried an active `Database__Path=db/app.db` line, so
+    a by-the-book copy pointed SQLite at `/app/db` — a directory the non-root
+    `app` user cannot create — and `restart: unless-stopped` turned the
+    resulting startup failure into a crash loop, with the `botdata` volume
+    silently unused. The key is therefore commented out (with the container
+    path as the commented value): local runs fall back to `appsettings.json`'s
+    `db/app.db` and Docker runs keep the image's `/data/app.db`, so the example
+    is safe in both places. APP.md's Docker section states the same rule
+    explicitly instead of claiming that everything in `.env.example` works in a
+    container unchanged.

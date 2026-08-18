@@ -28,12 +28,18 @@ issues are also announced publicly in the app's configured channel(s).
 2. **Defer, then immediate download.** On submit, the bot acknowledges the
    interaction ephemerally (Discord allows three seconds) and downloads any
    attached image bytes right away — Discord's CDN URLs expire in about 24
-   hours. Everything from here on stays private to the reporter until an
-   issue is actually created.
+   hours. Anything that is not an image, is larger than 10 MB, or fails to
+   download is skipped and listed by name in a warning line above the
+   reply, rather than costing the reporter their report. Everything from
+   here on stays private to the reporter until an issue is actually created.
 3. **Normalize.** The raw text goes to the chat model (`gpt-5.6-luna`), which
-   produces a structured `{title, body}` draft from a bug or feature
-   template and credits the reporting Discord user. It never invents facts
-   that weren't in the report.
+   produces a structured `{title, body}` draft following a bug template
+   (Description / Steps to Reproduce / Expected / Actual) or a feature
+   template (Summary / Motivation / Proposed Solution), translating into
+   English if needed. It never invents facts that weren't in the report — a
+   section with nothing to say is left out. The reporter credit is not part
+   of the draft; it is added to the body at the moment the issue or comment
+   is composed (step 9).
 4. **Embed.** The normalized text is embedded with `text-embedding-3-small`
    (1536 dimensions) for similarity search.
 5. **Cosine top-5.** The bot keeps an incrementally synced, embedded copy of
@@ -44,18 +50,34 @@ issues are also announced publicly in the app's configured channel(s).
    uncertain set of candidates, or no match. A parse failure degrades safely
    to "uncertain" rather than guessing.
 7. **Outcome handling** (all ephemeral): a match on an **open** issue offers
-   "add my report as a comment" or "show my draft instead"; a match on an
-   issue **closed under 30 days** asks "still happening?" (yes drafts a new
-   issue referencing the old one, no just links it and ends the flow);
-   **uncertain** shows the candidates plus a "none of these" escape hatch to
-   the draft; **no match** goes straight to the draft.
-8. **Preview and confirm.** Every path that can create or comment shows a
-   draft preview first; nothing reaches GitHub without an explicit confirm.
+   "Same issue — add my report" or "Not it — show my draft"; a match on an
+   issue **closed under 30 days** asks whether it is still happening ("Still
+   happening" drafts a new issue referencing the old one, "Looks fixed" just
+   links it and ends the flow); **uncertain** shows the candidates in a
+   select menu plus a "None of these — new issue" escape hatch to the draft;
+   **no match** goes straight to the draft.
+8. **Preview and confirm.** Nothing reaches GitHub without an explicit click
+   from the reporter. Every path that creates an issue shows the drafted
+   title and body first, behind a "Create issue" button. The duplicate path
+   confirms against the matched issue instead — "Same issue — add my report"
+   posts the comment straight away, with the draft one click away behind
+   "Not it — show my draft".
 9. **Create or comment.** On create: screenshots upload to GitHub and get
-   embedded in the body, the issue gets a `bug`/`enhancement` label, a public
+   embedded in the body under a `### Screenshots` heading, the body ends with
+   a `_Reported by **<name>** via Discord._` footer (and a
+   `Possible regression of #N.` line when the report came out of the
+   closed-issue flow), the issue gets a `bug`/`enhancement` label, a public
    announcement posts in the app's channel(s), and the reporter gets an
    ephemeral confirmation. On comment: screenshots upload the same way and
-   the comment is added, but nothing posts publicly.
+   the comment is added with the same footer, but nothing posts publicly. A
+   screenshot that cannot be uploaded is named in a note in the body rather
+   than blocking the issue.
+
+Between the modal submit and that final click the draft (with the downloaded
+screenshot bytes) lives in SQLite for **one hour**; an hourly background pass
+sweeps expired rows, and a click on an older message answers "this report
+session has expired". Clicking a button also strips the buttons off the
+message it was clicked on, so the same draft cannot be submitted twice.
 
 ## Slash commands
 
@@ -63,20 +85,24 @@ issues are also announced publicly in the app's configured channel(s).
 - **`/request-feature [app]`** — same flow, using the feature-request
   template and the `enhancement` label instead of `bug`.
 - **`/issues [app]`** — an ephemeral list of the target repo's open issue
-  titles with links, capped at 25 with a "+K more on GitHub" note.
+  titles with links, capped at 25 (and at what fits Discord's message size,
+  whole lines only) with a "+K more on GitHub" note for the rest.
 
 The `app` option is only needed when the guild maps to more than one
-configured app; with a single app it is ignored, and naming an unknown one
-answers with the valid names.
+configured app; with a single app it can be left out, and naming an unknown
+one answers with the valid names. A name that is given is always honoured —
+it must match a configured app of that guild, even when the guild has only
+one.
 
 ## Configuration
 
 Configuration layers in order, last one wins: `appsettings.json` →
 `appsettings.{Environment}.json` → environment variables (`__` as the
-nesting delimiter) → Docker secrets at `/run/secrets` (via
-`Microsoft.Extensions.Configuration.KeyPerFile`, so they always win). Mix and
-match freely — e.g. commit non-secret defaults to JSON and supply the
-Discord token and API keys as env vars or Docker secrets.
+nesting delimiter) → command-line arguments → Docker secrets at
+`/run/secrets` (via `Microsoft.Extensions.Configuration.KeyPerFile`, added
+last and only when that directory exists, so where they exist they always
+win). Mix and match freely — e.g. commit non-secret defaults to JSON and
+supply the Discord token and API keys as env vars or Docker secrets.
 
 The JSON shape (see `src/DiscordGithubBot/appsettings.json` for the
 checked-in defaults, and `.env.example` for the env-var form of every knob):
@@ -89,7 +115,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
     "ChatModel": "gpt-5.6-luna",
     "EmbeddingModel": "text-embedding-3-small"
   },
-  "Database": { "Path": "./db/app.db" },
+  "Database": { "Path": "db/app.db" },
   "Apps": [
     {
       "Name": "MyApp",
@@ -102,19 +128,44 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 }
 ```
 
+`Database:Path` is relative to the working directory (`db/app.db` by
+default); the folder is created at startup if it does not exist.
+
 `Apps` is a list, not a dictionary — `owner/repo` contains a `/`, which can't
 appear in an env-var name, so a list with a unique `Repo` field stays
-overridable. Startup fails fast, naming the offending key, if: there are no
-apps; any app has an empty/duplicate repo, empty token, no guild ids, or no
-channel ids; or the Discord token / OpenAI key is missing.
+overridable. Startup fails fast — every problem printed as a
+`CONFIG ERROR: <key> …` line on stderr, exit code 1, before anything
+connects — if: the Discord token, OpenAI key, chat model, embedding model or
+database path is missing; there are no apps; or any app has an empty name, a
+`Repo` that isn't `owner/repo`, a repo that another app already claims (case
+insensitive), an empty GitHub token, no guild ids, or no channel ids.
 
 ## Running locally
 
 `dotnet run --project src/DiscordGithubBot` runs it directly. Copy
 `.env.example` to `.env`, fill in real values, and export them into your
-shell (or use a tool that loads `.env` files) before running —
-`appsettings.json` ships with safe, secret-free defaults, so local runs just
-need the Discord token, OpenAI key, and per-app GitHub tokens from elsewhere.
+shell (or use a tool that loads `.env` files) before running — the app
+itself does not read `.env` files; only compose does. `appsettings.json`
+ships with safe, secret-free defaults, so local runs just need the Discord
+token, OpenAI key, and per-app GitHub tokens from elsewhere.
+
+`dotnet build` builds everything, `dotnet test` runs the suite.
+
+To check that image uploads work against a real repository without going
+through Discord:
+
+```
+dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo
+```
+
+It uploads a 1×1 PNG with the same code path a report uses and exits without
+starting the gateway. `owner/repo` must be one of the configured apps (its
+PAT is what gets used), and the rest of the configuration must still
+validate. Output is `SMOKE OK: <url>` (exit 0) or `SMOKE FAILED: both tiers
+failed` (exit 1); a `github.com/user-attachments/…` URL means the unofficial
+endpoint accepted the upload, a `raw.githubusercontent.com/…/issue-assets/…`
+URL means it did not and the Contents-API fallback did the work (the
+fall-through is also logged as a warning).
 
 ## Running in Docker
 
@@ -126,8 +177,17 @@ non-root `app` user and reads `Database__Path=/data/app.db`, with the named
 Secrets reach the container two ways, and you can mix them:
 
 - **`.env`** — copy `.env.example` to `.env` and fill it in; compose loads it
-  if it exists and ignores it if it doesn't (`required: false`). Everything
-  in `.env.example` works here, including `Apps__0__GitHubToken`.
+  if it exists and ignores it if it doesn't (`required: false`). Every key in
+  `.env.example` works here, including `Apps__0__GitHubToken`, with one
+  exception: **leave `Database__Path` out of a `.env` used with compose**
+  (it ships commented out for exactly this reason). A `.env` sets container
+  environment variables, which override the image's
+  `ENV Database__Path=/data/app.db`, so a relative `db/app.db` would put the
+  database under the root-owned `/app` — the non-root `app` user cannot
+  create that folder, the container dies on startup and `restart:
+  unless-stopped` turns it into a crash loop. If you do want the key in
+  `.env`, it must read `Database__Path=/data/app.db` so it still lands on
+  the `botdata` volume.
 - **Docker secrets** — files under `secrets/` (gitignored), mounted at
   `/run/secrets` and read key-per-file, so they win over everything else.
   The file *name* is the config key with `__` for nesting:
@@ -141,3 +201,47 @@ start if a referenced secret file is missing**. So the shipped
 `docker-compose.yml` is a starting point, not a requirement: if you keep
 everything in `.env`, delete the service-level `secrets:` list and the
 top-level `secrets:` block entirely.
+
+## Manual verification
+
+The suite covers the logic; these six steps cover the parts only a live bot
+can prove. Run the bot with a real Discord token, a real OpenAI key and a
+real GitHub PAT for a test repository, in a guild where that repository is
+the guild's **only** configured app.
+
+1. **Modal.** Run `/report-issue` in the guild. The `app` option can be left
+   empty (one app is configured), and the modal opens immediately — no app
+   picker, no extra step. Fill in the description, attach two screenshots,
+   submit.
+2. **New issue path.** The reply is the AI draft preview with **Create
+   issue** / **Cancel**. Press *Create issue* and check that: the issue
+   exists on GitHub with both screenshots rendering inline in the body, a
+   `bug` label, and a `_Reported by **<you>** via Discord._` footer; a public
+   announcement naming the app, the issue and the reporter appears in the
+   app's configured channel(s); and everything you saw in the command
+   channel was ephemeral ("Only you can see this") — the invoker's messages
+   never post publicly.
+3. **Duplicate path.** Report the same bug again with different wording. The
+   reply should be "This looks like an existing issue: #N …" with **Same
+   issue — add my report** / **Not it — show my draft**. Press *Same issue —
+   add my report* and confirm the comment (with its own screenshots and
+   reporter footer) lands on issue #N, and that nothing is announced
+   publicly.
+4. **Closed-issue path.** Close issue #N on GitHub, then report the same bug
+   a third time. The reply should be "This looks like #N …, closed recently.
+   Is it still happening?" with **Still happening** / **Looks fixed**. Press
+   *Still happening*, then *Create issue*, and confirm the new issue's body
+   carries `Possible regression of #N.` (Pressing *Looks fixed* instead just
+   links #N and ends the flow without writing to GitHub.)
+5. **`/issues`.** Run `/issues` and confirm the ephemeral list shows the
+   repository's open issues — it is read live from GitHub, so the issues you
+   just filed are in it — with links that open the right issues (and a
+   "+K more on GitHub" line if the repo has more than fits).
+6. **Image-upload smoke test.** Run
+   `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`
+   for the same repository and confirm it prints `SMOKE OK: <url>` and that
+   the URL opens the 1×1 PNG. A `github.com/user-attachments/…` URL means
+   the unofficial endpoint worked with your PAT; a
+   `raw.githubusercontent.com/…/issue-assets/…` URL is still a pass — it
+   records that the PAT cannot use the unofficial endpoint and that the
+   Contents-API fallback engaged (the warning in the log names the reason).

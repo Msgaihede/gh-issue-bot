@@ -19,6 +19,8 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 - Test: `dotnet test`
 - Run: `dotnet run --project src/DiscordGithubBot`
 - Image-upload smoke test: `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`
+  (`owner/repo` must be a configured app; prints `SMOKE OK: <url>` or `SMOKE FAILED: …`)
+- Manual (live-bot) checklist: APP.md → "Manual verification".
 
 ## Gotchas
 - Chat model must be `gpt-5.6-luna` — bare `gpt-5.6` routes to a 10x-cost tier.
@@ -32,3 +34,6 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
   `text:` together with `components:`, Discord rejects the combination.
 - Interaction handlers are `RunMode.Sync` on purpose: BotService owns the
   per-interaction DI scope and detaches the dispatch onto its own task itself.
+- The Docker image sets `Database__Path=/data/app.db`; a `.env` (or any env var)
+  with a relative path overrides it and puts the db under root-owned `/app`,
+  which crash-loops the container. `.env.example` keeps that key commented out.
