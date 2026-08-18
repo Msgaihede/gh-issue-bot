@@ -62,3 +62,14 @@ one paragraph. Seeded from the design spec's "Decisions log" section
 11. Pinned `OpenAI` down from 2.13.0 to 2.12.0 to stay within
     `Microsoft.Extensions.AI.OpenAI` 10.9.0's declared dependency range
     (`>= 2.12.0 && < 2.13.0`); NU1608 hygiene — builds must be warning-free.
+
+## 2026-08-18 (data model)
+
+12. **Schema created with `EnsureCreated()`, no EF migrations.** The bot owns
+    its SQLite file end to end and ships no migration history; the schema is
+    materialized with `EnsureCreated()` at startup (and in tests against an
+    in-memory connection). `IssueEmbedding.Vector` maps to a BLOB through a
+    `ValueConverter<float[], byte[]>` over `VectorConversion`, paired with a
+    sequence-equality `ValueComparer<float[]>` — without the comparer, EF
+    change tracking would treat the mutable array by reference and miss
+    in-place edits.
