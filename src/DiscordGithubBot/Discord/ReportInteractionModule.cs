@@ -31,7 +31,12 @@ public class ReportInteractionModule(
     : InteractionModuleBase<SocketInteractionContext>
 {
     private const string AppOptionDescription = "Which app (only needed when several are configured)";
-    private const string ExpiredMessage = "This report session has expired — please run the command again.";
+    // One wording for all three ways a pending report stops being actionable — expired, unknown, or
+    // claimed by a click that is already talking to GitHub. A reporter cannot tell them apart and does
+    // not need to: in every case the answer is to start again.
+    private const string ExpiredMessage =
+        "That report is no longer waiting — it expired, or another click is already handling it. " +
+        "Please run the command again.";
     private const string CancelledMessage = "Cancelled — nothing was created.";
     private const string GenericErrorMessage =
         "Something went wrong while processing your report. Please try again later.";

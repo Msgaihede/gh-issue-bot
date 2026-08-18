@@ -52,6 +52,14 @@ public class PendingReport
     public string CandidatesJson { get; set; } = "[]";
 
     public DateTime CreatedAtUtc { get; set; }
+
+    /// <summary>
+    /// When a confirmation click took ownership of this report, or null while it is still up for grabs.
+    /// Two clicks can land at the same instant; the one that wins the claim is the one that talks to
+    /// GitHub, and a failed attempt clears the field so the reporter can press the button again.
+    /// </summary>
+    public DateTime? ClaimedAtUtc { get; set; }
+
     public List<PendingAttachment> Attachments { get; set; } = new();
 }
 

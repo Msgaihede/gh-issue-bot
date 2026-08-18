@@ -31,7 +31,13 @@ public sealed record CreatedIssueResult(int Number, string Title, string HtmlUrl
 
 public sealed record CommentResult(int IssueNumber, string CommentUrl);
 
-public sealed class ExpiredPendingReportException() : Exception("This report session has expired — please submit again.");
+/// <summary>
+/// The report a click referred to is not available: unknown, past its one-hour life, or already claimed
+/// by another click that is talking to GitHub right now. All three read the same to a reporter — the
+/// buttons no longer do anything — so they share one exception rather than one per cause.
+/// </summary>
+public sealed class ExpiredPendingReportException()
+    : Exception("This report is no longer available — it expired, or another click is already handling it.");
 
 public interface IReportPipeline
 {
@@ -125,36 +131,55 @@ public sealed class ReportPipeline(
     public async Task<CreatedIssueResult> CreateIssueAsync(
         Guid pendingReportId, int? regressionOfIssueNumber, CancellationToken ct = default)
     {
-        var (report, app) = await LoadAsync(pendingReportId, ct);
-        var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
+        var (report, app) = await ClaimAsync(pendingReportId, ct);
 
-        var body = IssueBodyComposer.ComposeIssueBody(
-            report.DraftBody, report.ReporterDisplayName, images, failedUploads, regressionOfIssueNumber);
-        var label = report.Type == ReportType.Bug ? "bug" : "enhancement";
+        try
+        {
+            var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
 
-        var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, label, ct);
-        await store.DeleteAsync(pendingReportId, ct);
+            var body = IssueBodyComposer.ComposeIssueBody(
+                report.DraftBody, report.ReporterDisplayName, images, failedUploads, regressionOfIssueNumber);
+            var label = report.Type == ReportType.Bug ? "bug" : "enhancement";
 
-        logger.LogInformation(
-            "Created issue #{Number} in {Repo} for {Reporter}.", issue.Number, app.Repo, report.ReporterDisplayName);
-        return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl);
+            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, label, ct);
+            await store.DeleteAsync(pendingReportId, ct);
+
+            logger.LogInformation(
+                "Created issue #{Number} in {Repo} for {Reporter}.", issue.Number, app.Repo, report.ReporterDisplayName);
+            return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl);
+        }
+        catch
+        {
+            await ReleaseClaimQuietlyAsync(pendingReportId);
+            throw;
+        }
     }
 
     public async Task<CommentResult> AddCommentAsync(
         Guid pendingReportId, int issueNumber, CancellationToken ct = default)
     {
-        var (report, app) = await LoadAsync(pendingReportId, ct);
-        var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
+        var (report, app) = await ClaimAsync(pendingReportId, ct);
 
-        var body = IssueBodyComposer.ComposeCommentBody(
-            report.DraftBody, report.ReporterDisplayName, images, failedUploads);
+        try
+        {
+            var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
 
-        var commentUrl = await gitHub.AddCommentAsync(app, issueNumber, body, ct);
-        await store.DeleteAsync(pendingReportId, ct);
+            var body = IssueBodyComposer.ComposeCommentBody(
+                report.DraftBody, report.ReporterDisplayName, images, failedUploads);
 
-        logger.LogInformation(
-            "Commented on issue #{Number} in {Repo} for {Reporter}.", issueNumber, app.Repo, report.ReporterDisplayName);
-        return new CommentResult(issueNumber, commentUrl);
+            var commentUrl = await gitHub.AddCommentAsync(app, issueNumber, body, ct);
+            await store.DeleteAsync(pendingReportId, ct);
+
+            logger.LogInformation(
+                "Commented on issue #{Number} in {Repo} for {Reporter}.",
+                issueNumber, app.Repo, report.ReporterDisplayName);
+            return new CommentResult(issueNumber, commentUrl);
+        }
+        catch
+        {
+            await ReleaseClaimQuietlyAsync(pendingReportId);
+            throw;
+        }
     }
 
     public Task CancelAsync(Guid pendingReportId, CancellationToken ct = default) =>
@@ -206,17 +231,42 @@ public sealed class ReportPipeline(
     private static ReportOutcome NoMatch(Guid id, IssueDraft draft) =>
         new(ReportOutcomeKind.NoMatch, id, draft, null, []);
 
-    /// <summary>Loads a pending report and the app that owns its repository.</summary>
-    /// <exception cref="ExpiredPendingReportException">the report is unknown or older than its lifetime</exception>
-    private async Task<(PendingReport Report, AppConfig App)> LoadAsync(Guid pendingReportId, CancellationToken ct)
+    /// <summary>
+    /// Takes exclusive ownership of a pending report and finds the app that owns its repository. Every
+    /// path out of this method either returns a claim the caller must release or throws having released
+    /// nothing, which is why the app lookup is inside the same try.
+    /// </summary>
+    /// <exception cref="ExpiredPendingReportException">unknown, expired, or claimed by another click</exception>
+    private async Task<(PendingReport Report, AppConfig App)> ClaimAsync(Guid pendingReportId, CancellationToken ct)
     {
-        var report = await store.GetAsync(pendingReportId, ct) ?? throw new ExpiredPendingReportException();
+        var report = await store.TryClaimAsync(pendingReportId, ct) ?? throw new ExpiredPendingReportException();
 
-        var app = options.AppByRepo(report.RepoKey)
-            ?? throw new InvalidOperationException(
-                $"No app is configured for repository '{report.RepoKey}'.");
+        var app = options.AppByRepo(report.RepoKey);
+        if (app is not null) return (report, app);
 
-        return (report, app);
+        await ReleaseClaimQuietlyAsync(pendingReportId);
+        throw new InvalidOperationException($"No app is configured for repository '{report.RepoKey}'.");
+    }
+
+    /// <summary>
+    /// Hands a claim back after a failed attempt, preserving decision 27: a GitHub call that fails must
+    /// cost the reporter nothing, so the draft, its screenshots and its buttons all stay usable. The
+    /// release runs on <see cref="CancellationToken.None"/> because it is compensation for a failure that
+    /// may itself have been a cancellation, and it swallows its own errors so it never replaces the real
+    /// exception with a bookkeeping one — a claim left behind is cleaned up with the report at expiry.
+    /// </summary>
+    private async Task ReleaseClaimQuietlyAsync(Guid pendingReportId)
+    {
+        try
+        {
+            await store.ReleaseClaimAsync(pendingReportId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "Could not release the claim on pending report {PendingId}; it will expire instead.",
+                pendingReportId);
+        }
     }
 
     /// <summary>

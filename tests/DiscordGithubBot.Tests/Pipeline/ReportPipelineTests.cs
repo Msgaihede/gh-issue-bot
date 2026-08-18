@@ -36,6 +36,13 @@ public class ReportPipelineTests
             .Returns(new IssueDraft("Draft title", "Draft body"));
     }
 
+    private static PendingReport Pending(Guid id) => new()
+    {
+        Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
+        Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
+        CreatedAtUtc = DateTime.UtcNow,
+    };
+
     private static ReportSubmission Submission(params AttachmentPayload[] attachments) =>
         new(App, ReportType.Bug, 42UL, "markus", "it broke", attachments);
 
@@ -123,7 +130,7 @@ public class ReportPipelineTests
     public async Task CreateIssue_uploads_images_composes_body_and_deletes_pending()
     {
         var id = Guid.NewGuid();
-        _store.GetAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
         {
             Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
             Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
@@ -153,17 +160,67 @@ public class ReportPipelineTests
     }
 
     [Fact]
-    public async Task CreateIssue_with_expired_pending_throws()
+    public async Task CreateIssue_with_an_unclaimable_pending_report_throws()
     {
-        _store.GetAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((PendingReport?)null);
+        // Unknown, expired, and "a second click got here first" all arrive as a null claim.
+        _store.TryClaimAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((PendingReport?)null);
         await Assert.ThrowsAsync<ExpiredPendingReportException>(() => _sut.CreateIssueAsync(Guid.NewGuid(), null));
+    }
+
+    [Fact]
+    public async Task A_second_click_loses_the_claim_and_never_reaches_github()
+    {
+        var id = Guid.NewGuid();
+        var claimed = false;
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            if (claimed) return null;
+            claimed = true;
+            return Pending(id);
+        });
+        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubIssue(101, "T", "B", "open", DateTime.UtcNow, null, "https://gh/101"));
+
+        await _sut.CreateIssueAsync(id, null);
+        await Assert.ThrowsAsync<ExpiredPendingReportException>(() => _sut.CreateIssueAsync(id, null));
+
+        await _gitHub.Received(1).CreateIssueAsync(
+            App, "T", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_failed_creation_hands_the_claim_back_and_keeps_the_draft()
+    {
+        var id = Guid.NewGuid();
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
+        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<GitHubIssue>(_ => throw new HttpRequestException("502"));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => _sut.CreateIssueAsync(id, null));
+
+        await _store.Received(1).ReleaseClaimAsync(id, Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().DeleteAsync(id, Arg.Any<CancellationToken>()); // decision 27
+    }
+
+    [Fact]
+    public async Task A_failed_comment_hands_the_claim_back_and_keeps_the_draft()
+    {
+        var id = Guid.NewGuid();
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
+        _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<string>(_ => throw new HttpRequestException("502"));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => _sut.AddCommentAsync(id, 7));
+
+        await _store.Received(1).ReleaseClaimAsync(id, Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().DeleteAsync(id, Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task AddComment_composes_comment_and_deletes_pending()
     {
         var id = Guid.NewGuid();
-        _store.GetAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
         {
             Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
             Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
@@ -184,7 +241,7 @@ public class ReportPipelineTests
     public async Task Feature_reports_use_enhancement_label()
     {
         var id = Guid.NewGuid();
-        _store.GetAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
         {
             Id = id, RepoKey = "owner/repo", DiscordUserId = 1, ReporterDisplayName = "u",
             Type = ReportType.Feature, OriginalText = "x", DraftTitle = "T", DraftBody = "B",

@@ -315,10 +315,12 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     the three-second deadline and makes a second click on that message
     impossible. If Discord refuses the update the handler falls back to a plain
     ephemeral defer and logs it, so the click is still acknowledged. Two clicks
-    landing at the same instant can still both get through; the pipeline settles
-    that race by itself, because the first one to finish deletes the pending
-    report and the second then fails with `ExpiredPendingReportException`, which
-    every handler turns into the "this report session has expired" reply.
+    landing at the same instant can still both get through, and the pipeline
+    settles that race with the claim described in decision 49. *(Revised
+    2026-08-18 — this entry previously claimed the race was settled by the
+    delete-after-GitHub ordering. It was not: the delete happens after the
+    GitHub call, so two clicks that both read the report before either finished
+    would both create an issue.)*
 
 32. **The Discord layer answers with words, never with a stack trace.**
     `ExpiredPendingReportException` and `NormalizationException` are the two
@@ -542,3 +544,49 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     the morning. Both are green, so both stay on, and the two module tests
     share one `BuildProvider` helper so no test can quietly opt out of a guard.
 
+49. **A pending report is claimed, not merely read, before a confirmation click
+    acts on it.** Decision 31 asserted that the pipeline settled a double click
+    by itself. It did not. Both handlers used to `GetAsync` the report, upload
+    the screenshots, call GitHub, and only then `DeleteAsync` — so two clicks
+    landing inside that window (a double-tap, or the same message clicked from
+    two devices) each read a live report and each created an issue. The delete
+    ordering that decision 27 requires is exactly what left the window open.
+    `PendingReport` therefore gains `ClaimedAtUtc`, and the store gains a
+    claim-and-consume pair: `TryClaimAsync` is a single
+    `ExecuteUpdateAsync` whose WHERE clause carries the whole precondition
+    (`Id = id AND ClaimedAtUtc IS NULL AND` not expired), so SQLite decides the
+    race, and only the caller whose statement reports exactly one affected row
+    loads the report. `CreateIssueAsync`/`AddCommentAsync` claim instead of
+    read; the loser gets `null`, which is the same
+    `ExpiredPendingReportException` an expired report already produced.
+    `ReleaseClaimAsync` puts the claim back on any failure, which is what keeps
+    decision 27 true: a 502 from GitHub still costs the reporter nothing.
+    Release runs on `CancellationToken.None` and swallows its own errors, so it
+    cannot replace the real exception with a bookkeeping one; a claim it fails
+    to return simply expires with the report.
+
+50. **Expired, unknown and already-claimed share one reply.** The three are
+    genuinely different states, but a reporter cannot act on the difference —
+    in every case the buttons no longer do anything and the answer is to run the
+    command again. `ExpiredPendingReportException` therefore covers all three
+    and the Discord layer answers with one message: "That report is no longer
+    waiting — it expired, or another click is already handling it. Please run
+    the command again." Naming the concurrent case explicitly is deliberate: a
+    reporter who double-clicked and sees "expired" one second after submitting
+    reasonably concludes the bot is broken.
+
+51. **`PeekAsync` deliberately ignores claims.** The non-destructive read behind
+    the draft-preview, pick and "looks fixed" handlers still uses `GetAsync`.
+    Peeking at a report someone else is in the middle of creating shows the
+    reporter their own draft, which is harmless; making peek claim-aware would
+    turn a read into a lock and break the handlers that peek and then act.
+
+52. **The `ClaimedAtUtc` column ships without a migration.** Per decision 12 the
+    schema is materialized with `EnsureCreated()`, which creates missing tables
+    but never alters an existing one. This project is greenfield and unreleased,
+    so there is no deployed database to migrate; anyone who has been running a
+    build from before this change must delete their SQLite file (it holds only a
+    rebuildable embedding cache and drafts younger than an hour) or the first
+    query against `PendingReports` will fail on the missing column. The day the
+    bot has real users is the day this repo needs EF migrations, and that
+    trade-off is unchanged by this entry.

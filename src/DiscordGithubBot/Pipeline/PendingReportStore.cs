@@ -10,6 +10,15 @@ public interface IPendingReportStore
     /// <returns>null when unknown OR older than 1 hour (expired rows are deleted on read).</returns>
     Task<PendingReport?> GetAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>
+    /// Takes exclusive ownership of a report so only one confirmation click can act on it.
+    /// </summary>
+    /// <returns>the report, or null when it is unknown, expired, or already claimed.</returns>
+    Task<PendingReport?> TryClaimAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>Gives a claim back, so a failed attempt can be retried from the same buttons.</summary>
+    Task ReleaseClaimAsync(Guid id, CancellationToken ct = default);
+
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>Deletes all reports older than 1 hour. Called by the maintenance service.</summary>
@@ -46,6 +55,37 @@ public sealed class PendingReportStore(BotDbContext db) : IPendingReportStore
 
         await DeleteAsync(id, ct);
         return null;
+    }
+
+    /// <summary>
+    /// One UPDATE decides the race. The <c>ClaimedAtUtc IS NULL</c> predicate lives in the WHERE clause, so
+    /// SQLite — not this process — serializes two simultaneous clicks, and only the statement that reports
+    /// one affected row gets to load the report. The expiry test rides along in the same predicate, so a
+    /// report cannot be claimed in the moment between expiring and being swept.
+    /// </summary>
+    public async Task<PendingReport?> TryClaimAsync(Guid id, CancellationToken ct = default)
+    {
+        var cutoff = Cutoff();
+        var now = DateTime.UtcNow;
+
+        var claimed = await db.PendingReports
+            .Where(r => r.Id == id && r.ClaimedAtUtc == null && r.CreatedAtUtc >= cutoff)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.ClaimedAtUtc, now), ct);
+
+        if (claimed != 1) return null;
+
+        // Untracked for the same reason as GetAsync: the caller reads the draft and its attachment bytes
+        // to build an issue, never to edit them.
+        return await db.PendingReports.AsNoTracking()
+            .Include(r => r.Attachments)
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+    }
+
+    public async Task ReleaseClaimAsync(Guid id, CancellationToken ct = default)
+    {
+        await db.PendingReports
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.ClaimedAtUtc, (DateTime?)null), ct);
     }
 
     /// <summary>

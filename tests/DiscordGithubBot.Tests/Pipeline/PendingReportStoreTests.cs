@@ -60,6 +60,46 @@ public sealed class PendingReportStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_report_can_only_be_claimed_once()
+    {
+        var id = Guid.NewGuid();
+        await _sut.SaveAsync(Report(id, DateTime.UtcNow));
+
+        var first = await _sut.TryClaimAsync(id);
+        var second = await _sut.TryClaimAsync(id);
+
+        Assert.NotNull(first);
+        Assert.Single(first.Attachments); // the winner gets the screenshots, not just the row
+        Assert.Null(second);
+    }
+
+    [Fact]
+    public async Task Releasing_a_claim_makes_the_report_claimable_again()
+    {
+        var id = Guid.NewGuid();
+        await _sut.SaveAsync(Report(id, DateTime.UtcNow));
+        Assert.NotNull(await _sut.TryClaimAsync(id));
+
+        await _sut.ReleaseClaimAsync(id);
+
+        Assert.NotNull(await _sut.TryClaimAsync(id));
+    }
+
+    [Fact]
+    public async Task An_expired_report_cannot_be_claimed()
+    {
+        var id = Guid.NewGuid();
+        await _sut.SaveAsync(Report(id, DateTime.UtcNow.AddHours(-2)));
+
+        Assert.Null(await _sut.TryClaimAsync(id));
+        Assert.Null(_db.PendingReports.Single(r => r.Id == id).ClaimedAtUtc);
+    }
+
+    [Fact]
+    public async Task An_unknown_report_cannot_be_claimed() =>
+        Assert.Null(await _sut.TryClaimAsync(Guid.NewGuid()));
+
+    [Fact]
     public async Task Deleting_a_report_takes_its_attachment_blobs_with_it()
     {
         var expired = Guid.NewGuid();
