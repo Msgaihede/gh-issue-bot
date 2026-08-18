@@ -5,6 +5,7 @@ using DiscordGithubBot.Pipeline;
 using DiscordGithubBot.Tests.TestDoubles;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -107,6 +108,51 @@ public sealed class IssueSyncServiceTests : IDisposable
 
         Assert.Equal([1, 2], candidates.Select(c => c.IssueNumber).Order().ToArray());
         Assert.Null(await _db.IssueEmbeddings.SingleOrDefaultAsync(e => e.IssueNumber == 3)); // pruned
+    }
+
+    [Fact]
+    public async Task Http_timeout_is_swallowed_like_any_github_failure()
+    {
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>()).Returns([Issue(1)]);
+        await _sut.SyncAsync(App);
+
+        // HttpClient reports its own timeout as a TaskCanceledException even though nobody cancelled.
+        _gitHub.ListIssuesAsync(App, "all", Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<GitHubIssue>>>(
+                _ => throw new TaskCanceledException("timeout", new TimeoutException()));
+        await _sut.SyncAsync(App, CancellationToken.None); // must not throw
+
+        Assert.Equal(1, _db.IssueEmbeddings.Count());
+    }
+
+    [Fact]
+    public async Task Cancellation_propagates_and_leaves_no_half_written_rows_tracked()
+    {
+        using var cts = new CancellationTokenSource();
+        var sut = new IssueSyncService(_db, _gitHub, new CancellingEmbedder(cts), NullLogger<IssueSyncService>.Instance);
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>()).Returns([Issue(1)]);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.SyncAsync(App, cts.Token));
+
+        Assert.DoesNotContain(_db.ChangeTracker.Entries(), e => e.State == EntityState.Added);
+        await _db.SaveChangesAsync();
+        Assert.Empty(_db.IssueEmbeddings);
+    }
+
+    /// <summary>Cancels mid-sync, after the first row has been added to the change tracker.</summary>
+    private sealed class CancellingEmbedder(CancellationTokenSource cts)
+        : IEmbeddingGenerator<string, Embedding<float>>
+    {
+        public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
+            IEnumerable<string> values, EmbeddingGenerationOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 
     public void Dispose() { _db.Dispose(); _conn.Dispose(); }

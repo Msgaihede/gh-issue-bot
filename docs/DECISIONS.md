@@ -177,12 +177,18 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     ranking and the judge, and tracking them would make the change tracker
     snapshot-clone every vector.
 
-21. **Cancellation is rethrown, and the content hash advances only after the
-    vector it describes is in hand.** `SyncAsync` swallows GitHub and embedding
-    failures per the resilience decision, but `OperationCanceledException` is
-    rethrown ahead of that catch, matching the AI services (decision 15): a
-    cancelled sync is a shutting-down host, not a stale cache worth logging as
-    a warning. A new row is inserted with an empty `ContentHash` and both new
+21. **Only a cancellation of our own token is rethrown, and the content hash
+    advances only after the vector it describes is in hand.** `SyncAsync`
+    swallows GitHub and embedding failures per the resilience decision, but a
+    genuine cancellation is rethrown ahead of that catch, matching the AI
+    services (decision 15): a cancelled sync is a shutting-down host, not a
+    stale cache worth logging as a warning. The rethrow is guarded with
+    `when (ct.IsCancellationRequested)` because `HttpClient` reports its own
+    timeout as a `TaskCanceledException` with nothing cancelled — an unguarded
+    `catch (OperationCanceledException) { throw; }` would let the single most
+    likely GitHub failure escape a method whose contract is that it never
+    throws on GitHub failure, and the report pipeline awaits it bare on that
+    promise. A new row is inserted with an empty `ContentHash` and both new
     and changed rows get their hash set only inside the embedding step, so an
     embedding that throws mid-batch leaves the row looking stale — the next
     sync retries it instead of treating a vector-less row as up to date.
@@ -197,6 +203,8 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     context, the exact opposite of the swallow-and-continue contract. The
     catch therefore detaches Added and reverts Modified entries for the two
     entity types this service owns, leaving the cache byte-for-byte as it was
-    before the sync started. Verified with a throwaway test (a flaky embedder
-    followed by an unrelated `PendingReport` save on the same context); it is
-    not in the repo because the brief pins the committed test file verbatim.
+    before the sync started — on the cancellation path too, which rolls back
+    before rethrowing, since a cancelled host may still reuse the context to
+    finish the in-flight interaction. Verified with a flaky embedder plus an
+    unrelated `PendingReport` save on the same context, and pinned in the
+    committed suite by `Cancellation_propagates_and_leaves_no_half_written_rows_tracked`.

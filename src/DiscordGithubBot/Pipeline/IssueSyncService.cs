@@ -66,8 +66,11 @@ public sealed class IssueSyncService(
             await db.SaveChangesAsync(ct);
             logger.LogDebug("Synced {Count} issue(s) for {Repo}.", issues.Count, repoKey);
         }
-        catch (OperationCanceledException)
+        // Only a genuine cancellation of *our* token escapes: an HttpClient timeout also surfaces as
+        // a TaskCanceledException, and that is an ordinary GitHub failure the cache should absorb.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            RollbackPendingChanges();
             throw;
         }
         catch (Exception ex)
