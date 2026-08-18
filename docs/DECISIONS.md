@@ -590,3 +590,26 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     query against `PendingReports` will fail on the missing column. The day the
     bot has real users is the day this repo needs EF migrations, and that
     trade-off is unchanged by this entry.
+
+53. **The channel announcement carries a media gallery, and the uploaded images
+    ride on `CreatedIssueResult` to get there.** The spec's Discord-layer
+    section asks for "media gallery for screenshots in the channel
+    announcement"; the implementation announced text only, which was a silent
+    drift, not a decision. The obstacle was ownership: by the time the
+    announcement renders, the pending report and its attachment bytes have been
+    deleted, and the only surviving handle on the screenshots is the list of
+    GitHub URLs the upload step returned. `CreatedIssueResult` therefore gains
+    `IReadOnlyList<UploadedImage> Images`, and `RenderAnnouncement` adds a
+    `MediaGalleryBuilder` below the text when it is non-empty, capped at
+    `MediaGalleryBuilder.MaxItems`. Discord.Net 3.20.1's
+    `ComponentContainerExtensions.WithMediaGallery(IEnumerable<string>)` takes
+    plain URLs, so no fallback to a text list of links was needed. **Caveat
+    worth knowing:** a media gallery item is fetched by Discord, not by the
+    viewer, so it only renders for URLs Discord can reach anonymously. That is
+    true of `user-attachments` assets on public repositories; for a *private*
+    repository the tier-2 `raw.githubusercontent.com` URLs require a token and
+    the gallery item will fail to load. The text line above the gallery always
+    names and links the issue, so the announcement still does its job — but a
+    private-repo install should expect blank thumbnails until it is verified
+    against a real private repo (the manual checklist is the place for that).
+

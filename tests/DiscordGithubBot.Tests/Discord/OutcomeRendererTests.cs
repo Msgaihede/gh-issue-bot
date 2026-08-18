@@ -150,7 +150,7 @@ public class OutcomeRendererTests
     public void The_announcement_names_the_app_the_issue_and_the_reporter()
     {
         var message = OutcomeRenderer.RenderAnnouncement(
-            new CreatedIssueResult(12, "App crashes", "https://github.com/acme/mira/issues/12"),
+            new CreatedIssueResult(12, "App crashes", "https://github.com/acme/mira/issues/12", []),
             "mira", "Sam", ReportType.Bug);
 
         var text = Text(message);
@@ -160,10 +160,48 @@ public class OutcomeRendererTests
     }
 
     [Fact]
+    public void The_announcement_shows_the_screenshots_as_a_media_gallery()
+    {
+        var message = OutcomeRenderer.RenderAnnouncement(
+            new CreatedIssueResult(12, "App crashes", "https://github.com/acme/mira/issues/12",
+                [new UploadedImage("a.png", "https://gh/a.png"), new UploadedImage("b.png", "https://gh/b.png")]),
+            "mira", "Sam", ReportType.Bug);
+
+        var gallery = Assert.Single(Flatten(message).OfType<MediaGalleryComponent>());
+        Assert.Equal(["https://gh/a.png", "https://gh/b.png"], gallery.Items.Select(i => i.Media.Url));
+        Assert.Contains("[#12 App crashes]", Text(message)); // the text still leads
+    }
+
+    [Fact]
+    public void An_announcement_without_screenshots_has_no_gallery()
+    {
+        var message = OutcomeRenderer.RenderAnnouncement(
+            new CreatedIssueResult(12, "App crashes", "https://github.com/acme/mira/issues/12", []),
+            "mira", "Sam", ReportType.Bug);
+
+        Assert.Empty(Flatten(message).OfType<MediaGalleryComponent>());
+    }
+
+    [Fact]
+    public void The_gallery_never_exceeds_what_Discord_accepts()
+    {
+        var images = Enumerable.Range(1, MediaGalleryBuilder.MaxItems + 5)
+            .Select(n => new UploadedImage($"{n}.png", $"https://gh/{n}.png"))
+            .ToList();
+
+        var message = OutcomeRenderer.RenderAnnouncement(
+            new CreatedIssueResult(12, "App crashes", "https://github.com/acme/mira/issues/12", images),
+            "mira", "Sam", ReportType.Bug);
+
+        var gallery = Assert.Single(Flatten(message).OfType<MediaGalleryComponent>());
+        Assert.Equal(MediaGalleryBuilder.MaxItems, gallery.Items.Count);
+    }
+
+    [Fact]
     public void Titles_cannot_break_out_of_their_markdown_link()
     {
         var message = OutcomeRenderer.RenderAnnouncement(
-            new CreatedIssueResult(12, "Crash in [beta]\nbuild", "https://github.com/acme/mira/issues/12"),
+            new CreatedIssueResult(12, "Crash in [beta]\nbuild", "https://github.com/acme/mira/issues/12", []),
             "mira", "Sam", ReportType.Feature);
 
         Assert.Contains(@"[#12 Crash in \[beta\] build](https://github.com/acme/mira/issues/12)", Text(message));
@@ -209,7 +247,7 @@ public class OutcomeRendererTests
                 new ReportOutcome(ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), null, candidates),
                 huge),
             OutcomeRenderer.RenderAnnouncement(
-                new CreatedIssueResult(12, huge, "https://github.com/acme/mira/issues/12"), huge, huge, ReportType.Bug),
+                new CreatedIssueResult(12, huge, "https://github.com/acme/mira/issues/12", []), huge, huge, ReportType.Bug),
         ];
 
         Assert.All(messages, m => Assert.True(

@@ -27,7 +27,10 @@ public sealed record ReportOutcome(
     ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft,
     CandidateIssue? Match, IReadOnlyList<CandidateIssue> Candidates);
 
-public sealed record CreatedIssueResult(int Number, string Title, string HtmlUrl);
+/// <param name="Images">screenshots that made it to GitHub, in the order the reporter attached them;
+/// the channel announcement shows them as a media gallery</param>
+public sealed record CreatedIssueResult(
+    int Number, string Title, string HtmlUrl, IReadOnlyList<UploadedImage> Images);
 
 public sealed record CommentResult(int IssueNumber, string CommentUrl);
 
@@ -146,7 +149,7 @@ public sealed class ReportPipeline(
 
             logger.LogInformation(
                 "Created issue #{Number} in {Repo} for {Reporter}.", issue.Number, app.Repo, report.ReporterDisplayName);
-            return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl);
+            return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch
         {

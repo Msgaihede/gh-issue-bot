@@ -79,13 +79,24 @@ public static class OutcomeRenderer
                 .WithButton(ButtonBuilder.CreateDangerButton(
                     "Cancel", CustomIds.Build(CustomIds.Cancel, pendingId)))));
 
-    /// <summary>Public channel announcement for a created issue.</summary>
+    /// <summary>
+    /// Public channel announcement for a created issue, with the screenshots below the text as a media
+    /// gallery. The URLs are the GitHub-hosted ones the upload step returned, which Discord fetches
+    /// itself — the gallery is the reason the images are carried on <see cref="CreatedIssueResult"/> at
+    /// all, since the pending report (and its bytes) is gone by the time this renders.
+    /// </summary>
     public static MessageComponent RenderAnnouncement(
         CreatedIssueResult issue, string appName, string reporterDisplayName, ReportType type) =>
-        Container(container => container.WithTextDisplay(Budgeted(
-            $"**New {(type == ReportType.Bug ? "bug report" : "feature request")} for {Inline(appName)}**\n" +
-            $"[#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})\n" +
-            $"Reported by {Inline(reporterDisplayName)} via Discord")));
+        Container(container =>
+        {
+            container.WithTextDisplay(Budgeted(
+                $"**New {(type == ReportType.Bug ? "bug report" : "feature request")} for {Inline(appName)}**\n" +
+                $"[#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})\n" +
+                $"Reported by {Inline(reporterDisplayName)} via Discord"));
+
+            var urls = issue.Images.Select(i => i.Url).Take(MediaGalleryBuilder.MaxItems).ToList();
+            if (urls.Count > 0) container.WithMediaGallery(urls);
+        });
 
     /// <summary>Ephemeral open-issues list for /issues.</summary>
     public static MessageComponent RenderIssueList(string appName, IReadOnlyList<GitHubIssue> issues)
