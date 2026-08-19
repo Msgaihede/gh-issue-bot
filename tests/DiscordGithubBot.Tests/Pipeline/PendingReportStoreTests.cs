@@ -21,7 +21,7 @@ public sealed class PendingReportStoreTests : IDisposable
 
     private static PendingReport Report(Guid id, DateTime createdUtc) => new()
     {
-        Id = id, RepoKey = "o/r", DiscordUserId = 1, ReporterDisplayName = "u",
+        Id = id, RepoKey = "o/r", DiscordUserId = 1, ReporterDisplayName = "u", GuildName = "Acme HQ",
         Type = ReportType.Bug, OriginalText = "x", DraftTitle = "t", DraftBody = "b",
         CreatedAtUtc = createdUtc,
         Attachments = [new PendingAttachment { FileName = "a.png", ContentType = "image/png", Bytes = [1] }],
@@ -35,6 +35,11 @@ public sealed class PendingReportStoreTests : IDisposable
         var loaded = await _sut.GetAsync(id);
         Assert.NotNull(loaded);
         Assert.Single(loaded.Attachments);
+
+        // The footer is written from the stored guild name an hour after the modal was submitted,
+        // so the column has to survive the round trip through real SQLite.
+        Assert.Equal("Acme HQ", loaded.GuildName);
+        Assert.Equal("u", loaded.ReporterDisplayName);
     }
 
     [Fact]

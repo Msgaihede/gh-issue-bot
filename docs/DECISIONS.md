@@ -702,10 +702,12 @@ document that contradicts itself.
     test that pins a superseded requirement is the thing that is wrong. One
     footer serves both `ComposeIssueBody` and `ComposeCommentBody` — a comment
     is the same report reaching the same repository by a different route, and
-    two attribution formats would only invite drift. A blank server name falls
-    back to the old `_Created by **<name>** via Discord._`, so an interaction
-    that somehow carries no guild still credits someone rather than pointing at
-    an empty pair of asterisks. The server name goes through the same `Escape`
+    two attribution formats would only invite drift. A blank server name keeps
+    the old `via Discord` tail but not the old verb —
+    `_Created by **<name>** via Discord._` — so an interaction that somehow
+    carries no guild still credits someone rather than pointing at an empty
+    pair of asterisks, and it still reads as the same sentence as the one
+    beside it. The server name goes through the same `Escape`
     as the display name (decision 43): a guild owner picks their server name,
     which makes it attacker-chosen text by the same reasoning that covers
     display names and file names. The Discord-side announcement still says
