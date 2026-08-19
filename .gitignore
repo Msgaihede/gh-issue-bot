@@ -5,6 +5,6 @@ db/
 *.db-*
 .env
 secrets/
-appsettings.*.local.json
+appsettings.*.json
 .vs/
 TestResults/
