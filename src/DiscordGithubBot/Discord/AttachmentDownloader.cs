@@ -7,6 +7,8 @@ namespace DiscordGithubBot.Discord;
 /// <summary>
 /// Pulls modal attachments into memory while their CDN links are still alive (Discord expires them after
 /// roughly a day) and drops anything the pipeline cannot use: non-images, oversized files, failed downloads.
+/// "Non-image" means verified by signature, not declared: the type and size Discord reports come from the
+/// uploading client, so they only earn a file the download, never acceptance — see <see cref="ImageSniffer"/>.
 /// A skipped file is reported back by name rather than thrown, so one bad screenshot never costs a report.
 /// </summary>
 public sealed class AttachmentDownloader(HttpClient http, ILogger<AttachmentDownloader> logger)
@@ -23,6 +25,8 @@ public sealed class AttachmentDownloader(HttpClient http, ILogger<AttachmentDown
 
         foreach (var attachment in attachments)
         {
+            // Declared metadata is only good enough to decide whether a download is worth attempting;
+            // the real checks happen on the bytes below.
             if (attachment.ContentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) != true
                 || attachment.Size > MaxBytes)
             {
@@ -35,7 +39,28 @@ public sealed class AttachmentDownloader(HttpClient http, ILogger<AttachmentDown
                 // A fresh array per attachment: the pipeline hands these bytes straight to the entity it
                 // persists, so they must not be pooled or reused.
                 var bytes = await http.GetByteArrayAsync(attachment.Url, ct);
-                payloads.Add(new AttachmentPayload(attachment.Filename, attachment.ContentType, bytes));
+
+                if (bytes.Length > MaxBytes)
+                {
+                    logger.LogWarning(
+                        "Attachment {Name} downloaded {Actual} bytes, over the {Limit} byte limit; skipping it.",
+                        attachment.Filename, bytes.Length, MaxBytes);
+                    skipped.Add(attachment.Filename);
+                    continue;
+                }
+
+                if (!ImageSniffer.TryDetect(bytes, out var sniffed))
+                {
+                    logger.LogWarning(
+                        "Attachment {Name} is not a PNG, JPEG, GIF or WebP despite its declared type; skipping it.",
+                        attachment.Filename);
+                    skipped.Add(attachment.Filename);
+                    continue;
+                }
+
+                // The sniffed type, never the declared one — it is what the bytes actually are, and it
+                // travels on to GitHub as the upload's content type.
+                payloads.Add(new AttachmentPayload(attachment.Filename, sniffed, bytes));
             }
             catch (Exception ex)
             {

@@ -1039,3 +1039,25 @@ document that contradicts itself.
     back through the client) now resolves against the guild's own apps
     rather than every configured one, and an empty pick gets its own reply
     instead of the misleading "no longer configured".
+
+## 2026-08-19 (attachment validation)
+
+75. **Attachment bytes are verified by signature; the declared content type
+    never reaches the payload.** Discord derives an attachment's `ContentType`
+    from the file name the uploading client supplied, so `evil.exe` renamed to
+    `evil.png` arrives declared `image/png` — and the downloader used to hand
+    those bytes straight to SQLite and then to GitHub, where they become a
+    permanently hosted file under the repository's own identity. The download
+    now ends with `ImageSniffer`, which matches the leading magic bytes against
+    PNG, JPEG, GIF and WebP: the formats Discord actually produces and GitHub
+    actually renders inline. Anything else is skipped through the existing
+    skip/notice path, as is a body whose real length exceeds 10 MB — the
+    declared size is client-adjacent metadata too, and only the array we hold
+    is trustworthy. The declared type survives solely as a pre-download filter,
+    which is free and saves fetching obvious junk. SVG is deliberately not on
+    the allowlist: it is XML that can carry scripts, an XSS vector wherever it
+    is served inline, and being text it has no magic number to match anyway.
+    The payload now carries the sniffed type, which also fixes a smaller wart —
+    parameterised types like `image/png; charset=utf-8` no longer travel to the
+    upload endpoint (decision 44's `MediaTypeHeaderValue.Parse` stays as the
+    belt to this braces).

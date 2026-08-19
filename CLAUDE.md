@@ -34,6 +34,10 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 - Discord attachment URLs expire ~24h — bytes are downloaded during the modal
   handler and persisted in SQLite (PendingAttachment).
 - Never hotlink Discord CDN URLs in GitHub issue bodies.
+- Downloaded attachment bytes are magic-byte sniffed (`ImageSniffer`, PNG/JPEG/
+  GIF/WebP only) and the payload carries the *sniffed* content type, never
+  Discord's declared one — declared types come from the uploading client and are
+  spoofable. SVG is deliberately excluded (scriptable XML, no magic number).
 - float[] embeddings map to BLOB via a ValueConverter + ValueComparer (both required).
 - All interaction replies are ephemeral; only issue creations post publicly.
 - The report modal's "App" dropdown is not declared on ReportModal — its

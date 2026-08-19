@@ -30,8 +30,12 @@ issues are also announced publicly in the app's configured channel(s).
    attached image bytes right away — Discord's CDN URLs expire in about 24
    hours. Anything that is not an image, is larger than 10 MB, or fails to
    download is skipped and listed by name in a warning line above the
-   reply, rather than costing the reporter their report. Everything from
-   here on stays private to the reporter until an issue is actually created.
+   reply, rather than costing the reporter their report. "Not an image" is
+   decided on the downloaded bytes — their magic numbers must say PNG, JPEG,
+   GIF, or WebP — not on the type Discord declares, which is inferred from
+   the file name the uploading client chose and is therefore trivial to
+   fake. Everything from here on stays private to the reporter until an
+   issue is actually created.
 3. **Normalize.** The raw text goes to the chat model (`gpt-5.6-luna`), which
    produces a structured `{title, body}` draft following a bug template
    (Description / Steps to Reproduce / Expected / Actual) or a feature

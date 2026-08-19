@@ -19,8 +19,17 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
             }));
 
     /// <summary>
-    /// Like <see cref="When"/>, but each matching call answers with the next body in the list and the
-    /// last one repeats forever after. Lets a test script "this token expires soon, the next one does not".
+    /// Answers with raw bytes instead of JSON, for the callers that download files rather than API payloads.
+    /// </summary>
+    public void When(HttpMethod method, string urlContains, HttpStatusCode status, byte[] body) =>
+        _routes.Add((
+            req => req.Method == method && req.RequestUri!.ToString().Contains(urlContains),
+            _ => new HttpResponseMessage(status) { Content = new ByteArrayContent(body) }));
+
+    /// <summary>
+    /// Like <see cref="When(HttpMethod, string, HttpStatusCode, string)"/>, but each matching call answers
+    /// with the next body in the list and the last one repeats forever after. Lets a test script
+    /// "this token expires soon, the next one does not".
     /// </summary>
     public void WhenSequence(HttpMethod method, string urlContains, HttpStatusCode status, params string[] jsonBodies)
     {
