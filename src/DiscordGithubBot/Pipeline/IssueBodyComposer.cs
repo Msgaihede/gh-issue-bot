@@ -41,18 +41,25 @@ public static class IssueBodyComposer
         Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, regressionOfIssueNumber);
 
     /// <summary>
-    /// Composes the body of a comment added to an existing issue: identical to
-    /// <see cref="ComposeIssueBody"/> minus the regression reference.
+    /// Composes the body of a comment added to an existing issue. The first parameter is what the
+    /// report *adds* to that issue, not the report itself — the issue already says the rest. Empty
+    /// means the report added nothing, which composes to the attribution line alone. The footer verb
+    /// changes with it: a comment records that someone recreated or experienced the issue, not that
+    /// they created it.
     /// </summary>
     public static string ComposeCommentBody(
-        string draftBody, string reporterDisplayName, string guildName,
+        string additionalInfo, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
-        Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, regressionOfIssueNumber: null);
+        Compose(additionalInfo, reporterDisplayName, guildName, images, failedUploads,
+            regressionOfIssueNumber: null, FooterVerb.RecreatedExperienced);
+
+    /// <summary>How the footer credits the reporter: issues are created, comments recreate/experience.</summary>
+    private enum FooterVerb { Created, RecreatedExperienced }
 
     private static string Compose(
         string draftBody, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads,
-        int? regressionOfIssueNumber)
+        int? regressionOfIssueNumber, FooterVerb verb = FooterVerb.Created)
     {
         var sb = new StringBuilder();
 
@@ -85,7 +92,7 @@ public static class IssueBodyComposer
                 "> [!NOTE]\n> Screenshot upload failed for: " +
                 $"{string.Join(", ", failedUploads.Select(Escape))}.");
 
-        AppendBlock(sb, Footer(reporterDisplayName, guildName));
+        AppendBlock(sb, Footer(reporterDisplayName, guildName, verb));
 
         return sb.ToString();
     }
@@ -95,14 +102,15 @@ public static class IssueBodyComposer
     /// name we could not read leaves the reporter credited on their own rather than pointing at an empty
     /// server, so the footer always names someone.
     /// </summary>
-    private static string Footer(string reporterDisplayName, string guildName)
+    private static string Footer(string reporterDisplayName, string guildName, FooterVerb verb)
     {
         var reporter = Escape(reporterDisplayName);
         var server = Escape(guildName);
+        var action = verb == FooterVerb.Created ? "Created" : "Recreated/experienced";
 
         return server.Length == 0
-            ? $"---\n_Created by **{reporter}** via Discord._"
-            : $"---\n_Created by **{reporter}** in Discord server **{server}**._";
+            ? $"---\n_{action} by **{reporter}** via Discord._"
+            : $"---\n_{action} by **{reporter}** in Discord server **{server}**._";
     }
 
     /// <summary>

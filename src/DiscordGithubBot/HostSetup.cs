@@ -78,6 +78,7 @@ public static class HostSetup
         // pipeline
         services.AddScoped<IReportNormalizer, ReportNormalizer>();
         services.AddScoped<IDuplicateJudge, DuplicateJudge>();
+        services.AddScoped<IAdditionalInfoExtractor, AdditionalInfoExtractor>();
         services.AddScoped<IIssueSyncService, IssueSyncService>();
         services.AddScoped<IPendingReportStore, PendingReportStore>();
         services.AddScoped<IReportPipeline, ReportPipeline>();

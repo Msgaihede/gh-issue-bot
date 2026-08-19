@@ -18,6 +18,7 @@ public class ReportPipelineTests
     private readonly IPendingReportStore _store = Substitute.For<IPendingReportStore>();
     private readonly IGitHubService _gitHub = Substitute.For<IGitHubService>();
     private readonly IImageUploader _uploader = Substitute.For<IImageUploader>();
+    private readonly IAdditionalInfoExtractor _extractor = Substitute.For<IAdditionalInfoExtractor>();
     private readonly BotOptions _options;
     private readonly ReportPipeline _sut;
 
@@ -31,7 +32,7 @@ public class ReportPipelineTests
     {
         _options = new BotOptions { Apps = [App] };
         _sut = new ReportPipeline(_normalizer, new FakeEmbeddingGenerator(), _sync, _judge,
-            _store, _gitHub, _uploader, _options, NullLogger<ReportPipeline>.Instance);
+            _store, _gitHub, _uploader, _extractor, _options, NullLogger<ReportPipeline>.Instance);
         _normalizer.NormalizeAsync(Arg.Any<ReportType>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new IssueDraft("Draft title", "Draft body"));
     }
@@ -49,7 +50,8 @@ public class ReportPipelineTests
     private static IssueEmbedding Candidate(int n, string state = "open", DateTime? closedUtc = null) => new()
     {
         RepoKey = "owner/repo", IssueNumber = n, Title = $"Issue {n}", State = state,
-        ClosedAtUtc = closedUtc, ContentHash = "h", HtmlUrl = $"https://github.com/owner/repo/issues/{n}",
+        ClosedAtUtc = closedUtc, ContentHash = "h", BodyExcerpt = $"body {n}",
+        HtmlUrl = $"https://github.com/owner/repo/issues/{n}",
         Vector = [0.5f, 0.5f, 0.5f],
     };
 
@@ -60,6 +62,10 @@ public class ReportPipelineTests
     private void SetupVerdict(DuplicateVerdict verdict) =>
         _judge.JudgeAsync(Arg.Any<IssueDraft>(), Arg.Any<IReadOnlyList<IssueEmbedding>>(), Arg.Any<CancellationToken>())
             .Returns(verdict);
+
+    private void SetupExtractor(string? result) =>
+        _extractor.ExtractAsync(Arg.Any<IssueDraft>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(result);
 
     [Fact]
     public async Task No_match_routes_to_preview()
@@ -217,16 +223,22 @@ public class ReportPipelineTests
         await _store.DidNotReceive().DeleteAsync(id, Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task AddComment_composes_comment_and_deletes_pending()
+    /// <summary>Claims a pending report whose draft body is distinctive enough to assert on its absence.</summary>
+    private Guid ClaimablePending()
     {
         var id = Guid.NewGuid();
-        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
-        {
-            Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
-            GuildName = "Acme HQ", Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
-            CreatedAtUtc = DateTime.UtcNow,
-        });
+        var report = Pending(id);
+        report.DraftBody = "TheFullDraftBody";
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(report);
+        return id;
+    }
+
+    [Fact]
+    public async Task AddComment_posts_the_additional_info_not_the_draft_and_deletes_pending()
+    {
+        var id = ClaimablePending();
+        SetupCandidates(Candidate(7));
+        SetupExtractor("Only the new detail.");
         _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns("https://gh/7#c1");
 
@@ -234,10 +246,72 @@ public class ReportPipelineTests
 
         Assert.Equal("https://gh/7#c1", result.CommentUrl);
         await _gitHub.Received(1).AddCommentAsync(App, 7,
-            Arg.Is<string>(b => b.Contains("B")
-                && b.Contains("_Created by **markus** in Discord server **Acme HQ**._")),
+            Arg.Is<string>(b => b.Contains("Only the new detail.")
+                && !b.Contains("TheFullDraftBody")
+                && b.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._")),
             Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddComment_with_nothing_new_posts_only_the_attribution_line()
+    {
+        var id = ClaimablePending();
+        SetupCandidates(Candidate(7));
+        SetupExtractor("");
+        _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("u");
+
+        await _sut.AddCommentAsync(id, 7);
+
+        await _gitHub.Received(1).AddCommentAsync(App, 7,
+            Arg.Is<string>(b => !b.Contains("TheFullDraftBody")
+                && b.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddComment_falls_back_to_the_full_draft_when_extraction_fails()
+    {
+        var id = ClaimablePending();
+        SetupCandidates(Candidate(7));
+        SetupExtractor(null);
+        _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("u");
+
+        await _sut.AddCommentAsync(id, 7);
+
+        await _gitHub.Received(1).AddCommentAsync(App, 7,
+            Arg.Is<string>(b => b.Contains("TheFullDraftBody")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddComment_falls_back_when_the_matched_issue_is_not_cached()
+    {
+        var id = ClaimablePending();
+        SetupCandidates();
+        _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("u");
+
+        await _sut.AddCommentAsync(id, 7);
+
+        await _gitHub.Received(1).AddCommentAsync(App, 7,
+            Arg.Is<string>(b => b.Contains("TheFullDraftBody")),
+            Arg.Any<CancellationToken>());
+        await _extractor.DidNotReceiveWithAnyArgs().ExtractAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task AddComment_hands_the_cached_issue_and_the_draft_to_the_extractor()
+    {
+        var id = ClaimablePending();
+        SetupCandidates(Candidate(7));
+        SetupExtractor("");
+        _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("u");
+
+        await _sut.AddCommentAsync(id, 7);
+
+        await _extractor.Received(1).ExtractAsync(
+            Arg.Is<IssueDraft>(d => d.Title == "T" && d.Body == "TheFullDraftBody"),
+            "Issue 7", "body 7", Arg.Any<CancellationToken>());
     }
 
     [Fact]

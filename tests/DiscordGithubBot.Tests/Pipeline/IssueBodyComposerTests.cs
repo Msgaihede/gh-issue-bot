@@ -84,18 +84,29 @@ public class IssueBodyComposerTests
     [Fact]
     public void Comment_bodies_are_marked_too()
     {
-        var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);
+        var body = IssueBodyComposer.ComposeCommentBody("The new detail.", "markus", "Acme HQ", [], []);
 
         var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
         Assert.True(marker > 0);
-        Assert.Contains("_Created by", body[marker..]);
+        Assert.Contains("_Recreated/experienced by", body[marker..]);
     }
 
     [Fact]
-    public void Comment_body_carries_the_same_attribution_footer()
+    public void Comment_footer_says_recreated_experienced_not_created()
     {
-        var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);
-        Assert.Contains("_Created by **markus** in Discord server **Acme HQ**._", body);
+        var body = IssueBodyComposer.ComposeCommentBody("The new detail.", "markus", "Acme HQ", [], []);
+
+        Assert.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._", body);
+        Assert.DoesNotContain("_Created by", body);
+    }
+
+    [Fact]
+    public void Empty_additional_info_composes_to_just_the_attribution_line()
+    {
+        var body = IssueBodyComposer.ComposeCommentBody("", "markus", "Acme HQ", [], []);
+
+        Assert.StartsWith(IssueBodyComposer.MetaMarker, body);
+        Assert.EndsWith("_Recreated/experienced by **markus** in Discord server **Acme HQ**._", body);
     }
 
     [Theory]
@@ -107,7 +118,7 @@ public class IssueBodyComposerTests
         var comment = IssueBodyComposer.ComposeCommentBody("B", "markus", guildName, [], []);
 
         Assert.Contains("_Created by **markus** via Discord._", issue);
-        Assert.Contains("_Created by **markus** via Discord._", comment);
+        Assert.Contains("_Recreated/experienced by **markus** via Discord._", comment);
         Assert.DoesNotContain("Discord server", issue);
         Assert.DoesNotContain("Discord server", comment);
     }
@@ -197,7 +208,7 @@ public class IssueBodyComposerTests
         var body = IssueBodyComposer.ComposeCommentBody("B", "u", "g",
             [new UploadedImage("a.png", "https://x/a")], []);
         Assert.Contains("![a.png](https://x/a)", body);
-        Assert.Contains("_Created by **u** in Discord server **g**._", body);
+        Assert.Contains("_Recreated/experienced by **u** in Discord server **g**._", body);
         Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
     }
 }

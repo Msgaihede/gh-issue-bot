@@ -81,6 +81,7 @@ public sealed class ReportPipeline(
     IPendingReportStore store,
     IGitHubService gitHub,
     IImageUploader imageUploader,
+    IAdditionalInfoExtractor extractor,
     BotOptions options,
     ILogger<ReportPipeline> logger) : IReportPipeline
 {
@@ -174,7 +175,8 @@ public sealed class ReportPipeline(
             var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
 
             var body = IssueBodyComposer.ComposeCommentBody(
-                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads);
+                await AdditionalInfoOrDraftAsync(report, issueNumber, ct),
+                report.ReporterDisplayName, report.GuildName, images, failedUploads);
 
             var commentUrl = await gitHub.AddCommentAsync(app, issueNumber, body, ct);
             await store.DeleteAsync(pendingReportId, ct);
@@ -189,6 +191,40 @@ public sealed class ReportPipeline(
             await ReleaseClaimQuietlyAsync(pendingReportId);
             throw;
         }
+    }
+
+    /// <summary>
+    /// What a duplicate comment should say: only what the report adds to the matched issue, and "" when
+    /// it adds nothing (the composer then posts the attribution line alone). The comparison runs against
+    /// the cached title and body excerpt — the same text the judge matched on. When the issue is missing
+    /// from the cache or extraction fails, the full draft is posted instead, exactly as before this
+    /// feature: a redundant comment is recoverable, silently dropped details are not.
+    /// </summary>
+    private async Task<string> AdditionalInfoOrDraftAsync(
+        PendingReport report, int issueNumber, CancellationToken ct)
+    {
+        var candidates = await sync.GetCandidatesAsync(report.RepoKey, ct);
+        var existing = candidates.FirstOrDefault(c => c.IssueNumber == issueNumber);
+        if (existing is null)
+        {
+            logger.LogWarning(
+                "Issue #{Number} is not in the candidate cache for {Repo}; commenting with the full draft.",
+                issueNumber, report.RepoKey);
+            return report.DraftBody;
+        }
+
+        var info = await extractor.ExtractAsync(
+            new IssueDraft(report.DraftTitle, report.DraftBody),
+            existing.Title, existing.BodyExcerpt, ct);
+        if (info is null)
+        {
+            logger.LogWarning(
+                "Additional-info extraction failed for issue #{Number}; commenting with the full draft.",
+                issueNumber);
+            return report.DraftBody;
+        }
+
+        return info;
     }
 
     public Task CancelAsync(Guid pendingReportId, CancellationToken ct = default) =>

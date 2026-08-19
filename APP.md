@@ -76,10 +76,17 @@ issues are also announced publicly in the app's configured channel(s).
    `Possible regression of #N.` line when the report came out of the
    closed-issue flow), the issue gets a `bug`/`enhancement` label, a public
    announcement posts in the app's channel(s), and the reporter gets an
-   ephemeral confirmation. On comment: screenshots upload the same way and
-   the comment is added with the same footer, but nothing posts publicly. A
-   screenshot that cannot be uploaded is named in a note in the body rather
-   than blocking the issue.
+   ephemeral confirmation. On comment: screenshots upload the same way, but
+   the comment never repeats the report. An LLM compares the draft against
+   the matched issue (its cached title and first 1000 body characters) and
+   the comment carries only what the report adds — different repro steps,
+   environment or version details, error messages, workarounds — above a
+   `_Recreated/experienced by **<name>** in Discord server **<server>**._`
+   footer. A report that adds nothing posts that footer line alone, and if
+   the comparison itself fails the full draft is posted instead: dropping
+   details silently would be worse than repeating them. Nothing posts
+   publicly on the comment path. A screenshot that cannot be uploaded is
+   named in a note in the body rather than blocking the issue.
 
 Between the modal submit and that final click the draft (with the downloaded
 screenshot bytes) lives in SQLite for **one hour**; an hourly background pass
@@ -345,9 +352,10 @@ repeats what is worth repeating under a GitHub App.
 3. **Duplicate path.** Report the same bug again with different wording. The
    reply should be "This looks like an existing issue: #N …" with **Same
    issue — add my report** / **Not it — show my draft**. Press *Same issue —
-   add my report* and confirm the comment (with its own screenshots and
-   attribution footer) lands on issue #N, and that nothing is announced
-   publicly.
+   add my report* and confirm the comment lands on issue #N carrying only
+   what the second report added — or just the
+   "Recreated/experienced by …" line when it added nothing — with its own
+   screenshots, and that nothing is announced publicly.
 4. **Closed-issue path.** Close issue #N on GitHub, then report the same bug
    a third time. The reply should be "This looks like #N …, closed recently.
    Is it still happening?" with **Still happening** / **Looks fixed**. Press

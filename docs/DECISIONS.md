@@ -980,3 +980,24 @@ document that contradicts itself.
     long timeout, which existed only to serve flex. Both commits remain in
     history; if a background or batch chat path ever appears, the rollout
     is a cherry-pick away.
+
+## 2026-08-19 (duplicate comments)
+
+72. **A duplicate comment carries only what the report adds, never the whole
+    report again.** Confirming "same issue" used to post the full normalized
+    draft as the comment — a repeat of what the issue already says, which is
+    noise to every subscriber. Now `AdditionalInfoExtractor` (one extra chat
+    call, made only when the reporter confirms a duplicate) compares the
+    draft against the matched issue and returns a tri-state: new details are
+    posted above a "Recreated/experienced by <name> in Discord server
+    <server>" footer; a report that adds nothing posts that footer line
+    alone; and a failed extraction — or an issue missing from the candidate
+    cache — falls back to posting the full draft as before, because a
+    redundant comment is recoverable while silently dropped details are not.
+    The comparison runs against the cached title and 1000-character body
+    excerpt, the same text the duplicate judge matched on, so the comment
+    path adds no GitHub read. Known limit accepted with that choice: details
+    buried past the excerpt, or added earlier by another bot comment, can
+    still be repeated. Screenshots always post — they are new information by
+    nature. Issue bodies keep the "Created by" footer; only comments switch
+    to the recreated/experienced wording.
