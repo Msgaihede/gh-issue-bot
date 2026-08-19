@@ -911,14 +911,26 @@ document that contradicts itself.
     whatever GitHub happened to bump. `SyncAsync` therefore ends with a heal
     pass over this repo's mismatched rows, batched and flushed exactly like the
     main loop and equally free to fail — the watermark is untouched by it, so a
-    partial pass is simply finished by the next sync. The pass re-embeds from
-    the stored `Title` and `BodyExcerpt` rather than refetching from GitHub: for
-    an issue whose body fits the 1000-character excerpt (nearly all of them) the
-    text is exactly what a fresh sync would send, and a longer one gets a vector
-    built from its opening until its next real edit re-embeds it in full — the
-    cost of a full resync on every model change was not worth those tail
-    characters. The main loop is flushed before the pass runs, or a row embedded
-    seconds earlier would read back as stale and be paid for twice.
+    partial pass is simply finished by the next sync. The main loop is flushed
+    before the pass runs, or a row embedded seconds earlier would read back as
+    stale and be paid for twice.
+    The pass re-embeds from the stored `Title` and `BodyExcerpt` rather than
+    refetching the bodies from GitHub, and it is worth being exact about how
+    small that saving is. `ListIssuesAsync` pages at `per_page=100`, so a
+    refetch is about `N/100` HTTP requests — ten calls for a thousand stored
+    issues — and the embedding spend is the same either way, because the pass
+    embeds once per stale row wherever the text comes from. So the whole
+    purchase is a handful of GitHub requests per model change. The price is that
+    a body over 1000 characters is re-embedded from its opening only and keeps
+    that thinner vector until the issue is edited on GitHub and the incremental
+    path re-embeds it in full; bodies that long are not exotic, since a bug
+    report carrying a log excerpt or a stack trace passes 1000 characters
+    routinely, and no measurement of this repo's issue-length distribution was
+    taken. The trade was accepted because a model change is a rare,
+    operator-initiated event and a slightly thinner vector still ranks in the
+    right space, where a mismatched one does not rank at all — but it is a thin
+    margin, and switching the pass to refetch is the first thing to try if
+    duplicate verdicts degrade after a model change.
     Like decisions 52 and 59, the column ships **without a migration**:
     `EnsureCreated()` creates missing tables but never alters an existing one,
     so anyone running an older build must delete their SQLite file again (it

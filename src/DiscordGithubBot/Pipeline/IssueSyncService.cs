@@ -139,12 +139,19 @@ public sealed class IssueSyncService(
     /// Re-embeds this repo's rows whose vectors came from a different model, and returns how many.
     /// Sync only fetches issues updated since the watermark, so switching the configured model would
     /// otherwise leave every untouched issue out of <see cref="GetCandidatesAsync"/> forever — the
-    /// cache would quietly shrink to whatever GitHub happened to touch since the switch. Re-embedding
-    /// uses the stored title and body excerpt rather than a second GitHub pass: for the issues that
-    /// fit the excerpt (nearly all of them) the text is exactly what a fresh sync would send, and a
-    /// longer issue gets a vector built from its first 1000 body characters until its next real edit
-    /// re-embeds it in full. Batched and flushed like the main loop, and equally free to fail: the
-    /// caller's catch leaves the watermark where it was, so the next sync picks the rest up.
+    /// cache would quietly shrink to whatever GitHub happened to touch since the switch.
+    /// The pass re-embeds from the stored title and <see cref="IssueEmbedding.BodyExcerpt"/> rather
+    /// than refetching the bodies, and that trade is smaller than it looks: <c>ListIssuesAsync</c>
+    /// pages 100 issues per request, so refetching would cost roughly one HTTP call per hundred
+    /// stored issues, and the embedding spend is identical either way — this pass embeds once per
+    /// stale row regardless of where the text came from. What the saved calls cost is fidelity: a
+    /// body longer than <see cref="BodyExcerptLength"/> characters is re-embedded from its opening
+    /// and keeps that thinner vector until the issue is edited on GitHub and <see cref="UpsertAsync"/>
+    /// re-embeds it in full. Those bodies are not a rare case — a bug report with a log or a stack
+    /// trace in it passes 1000 characters easily — so refetching is the change to make if the
+    /// truncation ever shows up in the verdicts.
+    /// Batched and flushed like the main loop, and equally free to fail: the caller's catch leaves
+    /// the watermark where it was, so the next sync picks the rest up.
     /// </summary>
     private async Task<int> ReembedMismatchedModelsAsync(string repoKey, CancellationToken ct)
     {

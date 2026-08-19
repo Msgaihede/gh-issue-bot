@@ -263,6 +263,74 @@ public sealed class IssueSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_long_body_is_healed_from_its_excerpt_not_from_the_full_text()
+    {
+        // The documented cost of healing without a GitHub refetch: a body longer than the 1000-char
+        // excerpt is re-embedded from its opening only, and stays that way until a real edit.
+        var body = new string('a', 1000) + new string('b', 500);
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
+            .Returns([Issue(1, body: body)]);
+        await _sut.SyncAsync(App);
+
+        var sut = new IssueSyncService(
+            _db, _gitHub, _embedder, Options("text-embedding-3-large"),
+            NullLogger<IssueSyncService>.Instance);
+        _gitHub.ListIssuesAsync(App, "all", Arg.Is<DateTime?>(d => d != null), Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        await sut.SyncAsync(App);
+
+        // The first pass saw the whole body straight from GitHub; the heal pass saw only the excerpt.
+        Assert.Equal(2, _embedder.Inputs.Count);
+        Assert.Equal("t\n\n" + body, _embedder.Inputs[0]);
+        Assert.Equal("t\n\n" + new string('a', 1000), _embedder.Inputs[1]);
+        Assert.DoesNotContain("b", _embedder.Inputs[1]);
+    }
+
+    [Fact]
+    public async Task A_failed_heal_pass_keeps_its_finished_batches_but_not_the_watermark()
+    {
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
+            .Returns([Issue(1), Issue(2), Issue(3), Issue(4)]);
+        await _sut.SyncAsync(App);
+
+        // Pinned to a fixed instant rather than read off the clock, so "did it move?" cannot depend
+        // on how coarse DateTime.UtcNow happens to be between two syncs milliseconds apart.
+        var state = _db.RepoSyncStates.Find("owner/repo")!;
+        var watermark = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        state.LastSyncUtc = watermark;
+        await _db.SaveChangesAsync();
+
+        // The model changes and the embedding endpoint rate-limits partway through the heal pass.
+        const string newModel = "text-embedding-3-large";
+        var embedder = new FailingEmbedder(failOnCall: 3);
+        var sut = new IssueSyncService(
+            _db, _gitHub, embedder, Options(newModel), NullLogger<IssueSyncService>.Instance,
+            saveBatchSize: 2);
+        _gitHub.ListIssuesAsync(App, "all", Arg.Is<DateTime?>(d => d != null), Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        await sut.SyncAsync(App); // swallowed by contract, exactly like a failed main loop
+
+        // The batch that flushed before the failure keeps its new vectors; the rest are still stale.
+        Assert.Equal(2, _db.IssueEmbeddings.Count(e => e.EmbeddingModel == newModel));
+        Assert.Equal(2, _db.IssueEmbeddings.Count(e => e.EmbeddingModel == Model));
+
+        // And the watermark never moved, so the pass is retried rather than recorded as done. Read
+        // back from the database: a rolled-back tracked value would agree either way.
+        await _db.Entry(state).ReloadAsync();
+        Assert.Equal(watermark, state.LastSyncUtc);
+
+        // Only the rows still on the old model are re-embedded on the retry, and it completes.
+        embedder.Healthy = true;
+        await sut.SyncAsync(App);
+
+        Assert.Equal(4, _db.IssueEmbeddings.Count(e => e.EmbeddingModel == newModel));
+        await _db.Entry(state).ReloadAsync();
+        Assert.True(state.LastSyncUtc > watermark);
+    }
+
+    [Fact]
     public async Task Http_timeout_is_swallowed_like_any_github_failure()
     {
         _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>()).Returns([Issue(1)]);
