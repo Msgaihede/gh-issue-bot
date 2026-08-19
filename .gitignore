@@ -8,3 +8,4 @@ secrets/
 appsettings.*.json
 .vs/
 TestResults/
+stack.yml
