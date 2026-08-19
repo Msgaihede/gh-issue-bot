@@ -27,9 +27,10 @@ public interface IGitHubService
 
 /// <summary>
 /// GitHub REST issues client. The shared <see cref="HttpClient"/> carries the base address and the
-/// static headers; the per-app PAT is attached to every request because it differs per configured app.
+/// static headers; the per-app bearer token is attached to every request because it differs per
+/// configured app — and, for a GitHub App, expires and is re-minted by <see cref="IGitHubAuthProvider"/>.
 /// </summary>
-public sealed class GitHubService(HttpClient http) : IGitHubService
+public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : IGitHubService
 {
     /// <summary>GitHub's maximum page size for the issues endpoint.</summary>
     private const int PerPage = 100;
@@ -82,7 +83,7 @@ public sealed class GitHubService(HttpClient http) : IGitHubService
         AppConfig app, HttpMethod method, string path, object? payload, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(method, path);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", app.GitHubToken);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await auth.GetTokenAsync(app, ct));
         if (payload is not null)
             req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 

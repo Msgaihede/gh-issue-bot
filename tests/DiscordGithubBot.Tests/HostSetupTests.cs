@@ -2,6 +2,7 @@ using Discord.Interactions;
 using Discord.WebSocket;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Discord;
+using DiscordGithubBot.GitHub;
 using DiscordGithubBot.Pipeline;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -38,6 +39,34 @@ public class HostSetupTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IReportPipeline>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IIssueSyncService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IPendingReportStore>());
+    }
+
+    /// <summary>
+    /// The auth provider caches installation tokens, so a second instance means a second token per
+    /// interaction — and, at scale, GitHub's rate limit. Its own registration is what keeps it single;
+    /// the typed clients around it stay transient on purpose.
+    /// </summary>
+    [Fact]
+    public void The_github_auth_provider_is_a_singleton()
+    {
+        using var provider = BuildProvider();
+
+        using var first = provider.CreateScope();
+        using var second = provider.CreateScope();
+
+        Assert.Same(
+            first.ServiceProvider.GetRequiredService<IGitHubAuthProvider>(),
+            second.ServiceProvider.GetRequiredService<IGitHubAuthProvider>());
+    }
+
+    /// <summary>Both GitHub clients now take the auth provider; neither resolves if it is unregistered.</summary>
+    [Fact]
+    public void Both_github_clients_resolve_with_their_auth_provider()
+    {
+        using var provider = BuildProvider();
+
+        Assert.NotNull(provider.GetRequiredService<IGitHubService>());
+        Assert.NotNull(provider.GetRequiredService<IImageUploader>());
     }
 
     /// <summary>

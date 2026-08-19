@@ -10,6 +10,7 @@ using global::Discord.WebSocket;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenAI;
 
 namespace DiscordGithubBot;
@@ -20,8 +21,17 @@ namespace DiscordGithubBot;
 /// </summary>
 public static class HostSetup
 {
-    /// <summary>Base address for both GitHub clients; the uploads host is addressed absolutely.</summary>
+    /// <summary>Base address for every GitHub client; the uploads host is addressed absolutely.</summary>
     private const string GitHubApiBaseAddress = "https://api.github.com/";
+
+    /// <summary>Named client for the token exchange — named rather than typed, see the registration below.</summary>
+    private const string GitHubAuthClientName = "github-auth";
+
+    /// <summary>
+    /// How long a pooled connection on the long-lived auth client may live. Two minutes is the default
+    /// handler lifetime this replaces, so DNS changes are picked up on the same schedule as elsewhere.
+    /// </summary>
+    private static readonly TimeSpan AuthConnectionLifetime = TimeSpan.FromMinutes(2);
 
     public static IServiceCollection AddBotServices(this IServiceCollection services, BotOptions options)
     {
@@ -30,7 +40,18 @@ public static class HostSetup
         // database
         services.AddDbContext<BotDbContext>(o => o.UseSqlite($"Data Source={options.Database.Path}"));
 
-        // GitHub over HttpClient
+        // GitHub over HttpClient. The auth provider is the one GitHub client that must be a singleton —
+        // it caches installation tokens, and a transient would mint a fresh one per interaction. A typed
+        // client is transient by construction and would capture a factory handler forever, so it gets a
+        // *named* client instead, with the documented singleton mitigation: connection recycling moves
+        // down to SocketsHttpHandler, and the factory's own handler rotation is switched off.
+        services.AddHttpClient(GitHubAuthClientName, ConfigureGitHubClient)
+            .UseSocketsHttpHandler((handler, _) => handler.PooledConnectionLifetime = AuthConnectionLifetime)
+            .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
+        services.AddSingleton<IGitHubAuthProvider>(sp => new GitHubAuthProvider(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(GitHubAuthClientName),
+            sp.GetRequiredService<ILogger<GitHubAuthProvider>>()));
+
         services.AddHttpClient<IGitHubService, GitHubService>(ConfigureGitHubClient);
         services.AddHttpClient<IImageUploader, GitHubImageUploader>(ConfigureGitHubClient);
         services.AddHttpClient<AttachmentDownloader>();

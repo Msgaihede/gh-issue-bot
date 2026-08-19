@@ -15,7 +15,7 @@ public class ImageUploaderTests
     };
 
     private static GitHubImageUploader Uploader(FakeHttpMessageHandler fake) =>
-        new(fake.CreateClient(), NullLogger<GitHubImageUploader>.Instance);
+        new(fake.CreateClient(), new PassThroughAuthProvider(), NullLogger<GitHubImageUploader>.Instance);
 
     [Fact]
     public async Task Uses_unofficial_endpoint_when_it_works()

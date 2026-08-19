@@ -18,6 +18,23 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
                 Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json"),
             }));
 
+    /// <summary>
+    /// Like <see cref="When"/>, but each matching call answers with the next body in the list and the
+    /// last one repeats forever after. Lets a test script "this token expires soon, the next one does not".
+    /// </summary>
+    public void WhenSequence(HttpMethod method, string urlContains, HttpStatusCode status, params string[] jsonBodies)
+    {
+        var calls = 0;
+        _routes.Add((
+            req => req.Method == method && req.RequestUri!.ToString().Contains(urlContains),
+            _ => new HttpResponseMessage(status)
+            {
+                Content = new StringContent(
+                    jsonBodies[Math.Min(Interlocked.Increment(ref calls) - 1, jsonBodies.Length - 1)],
+                    System.Text.Encoding.UTF8, "application/json"),
+            }));
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);

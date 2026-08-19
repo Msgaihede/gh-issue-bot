@@ -103,6 +103,148 @@ public class BotOptionsTests
         Assert.Contains(errors, e => e.Contains("Name"));
     }
 
+    /// <summary>Stand-in PEM: validation only ever asks whether a key was configured, never parses one.</summary>
+    private const string Pem = "-----BEGIN RSA PRIVATE KEY-----not-a-real-key-----END RSA PRIVATE KEY-----";
+
+    /// <summary>A GitHub App app: no PAT, a complete <c>GitHubApp</c> block instead.</summary>
+    private static BotOptions AppAuth(Action<GitHubAppAuth>? tweak = null)
+    {
+        var o = Valid();
+        o.Apps[0].GitHubToken = "";
+        o.Apps[0].GitHubApp = new GitHubAppAuth
+        {
+            AppId = 12345, InstallationId = 987654, PrivateKey = Pem,
+        };
+        tweak?.Invoke(o.Apps[0].GitHubApp!);
+        return o;
+    }
+
+    [Fact]
+    public void A_github_app_block_is_a_valid_alternative_to_a_pat() => Assert.Empty(AppAuth().Validate());
+
+    [Fact]
+    public void Configuring_both_a_pat_and_a_github_app_is_reported()
+    {
+        var o = AppAuth();
+        o.Apps[0].GitHubToken = "pat";
+        Assert.Contains(o.Validate(), e => e.Contains("not both"));
+    }
+
+    [Fact]
+    public void Configuring_neither_a_pat_nor_a_github_app_is_reported()
+    {
+        var o = Valid();
+        o.Apps[0].GitHubToken = "";
+        Assert.Contains(o.Validate(), e => e.Contains("GitHubToken") && e.Contains("GitHubApp"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_missing_app_id_is_reported(long appId) =>
+        Assert.Contains(AppAuth(a => a.AppId = appId).Validate(), e => e.Contains("GitHubApp.AppId"));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_missing_installation_id_is_reported(long installationId) =>
+        Assert.Contains(
+            AppAuth(a => a.InstallationId = installationId).Validate(),
+            e => e.Contains("GitHubApp.InstallationId"));
+
+    [Fact]
+    public void A_github_app_block_with_no_private_key_at_all_is_reported() =>
+        Assert.Contains(
+            AppAuth(a => a.PrivateKey = "").Validate(),
+            e => e.Contains("PrivateKey") && e.Contains("required"));
+
+    [Fact]
+    public void A_github_app_block_with_both_key_forms_is_reported()
+    {
+        var path = TempPem();
+        try
+        {
+            Assert.Contains(
+                AppAuth(a => a.PrivateKeyPath = path).Validate(),
+                e => e.Contains("GitHubApp") && e.Contains("not both"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void A_private_key_path_that_exists_validates()
+    {
+        var path = TempPem();
+        try
+        {
+            Assert.Empty(AppAuth(a => { a.PrivateKey = ""; a.PrivateKeyPath = path; }).Validate());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void A_private_key_path_that_does_not_exist_is_reported()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"absent-{Guid.NewGuid():N}.pem");
+        Assert.Contains(
+            AppAuth(a => { a.PrivateKey = ""; a.PrivateKeyPath = missing; }).Validate(),
+            e => e.Contains("PrivateKeyPath") && e.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void A_private_key_path_is_trimmed_on_assignment()
+    {
+        var path = TempPem();
+        try
+        {
+            var o = AppAuth(a => { a.PrivateKey = ""; a.PrivateKeyPath = $" {path}\n"; });
+            Assert.Equal(path, o.Apps[0].GitHubApp!.PrivateKeyPath);
+            Assert.Empty(o.Validate());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Binds_a_github_app_block_from_configuration()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Discord:Token"] = "tok",
+            ["OpenAI:ApiKey"] = "key",
+            ["Apps:0:Name"] = "MyApp",
+            ["Apps:0:Repo"] = "owner/repo",
+            ["Apps:0:GitHubApp:AppId"] = "12345",
+            ["Apps:0:GitHubApp:InstallationId"] = "987654",
+            ["Apps:0:GitHubApp:PrivateKey"] = Pem,
+            ["Apps:0:GuildIds:0"] = "111111111111111111",
+            ["Apps:0:ChannelIds:0"] = "222222222222222222",
+        }).Build();
+
+        var o = config.Get<BotOptions>()!;
+
+        Assert.Empty(o.Validate());
+        Assert.Equal(12345L, o.Apps[0].GitHubApp!.AppId);
+        Assert.Equal(987654L, o.Apps[0].GitHubApp!.InstallationId);
+    }
+
+    [Fact]
+    public void A_pat_only_app_binds_without_a_github_app_block()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Apps:0:GitHubToken"] = "pat",
+        }).Build();
+
+        Assert.Null(config.Get<BotOptions>()!.Apps[0].GitHubApp);
+    }
+
+    private static string TempPem()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"key-{Guid.NewGuid():N}.pem");
+        File.WriteAllText(path, Pem);
+        return path;
+    }
+
     [Fact]
     public void AppsForGuild_filters_by_guild()
     {

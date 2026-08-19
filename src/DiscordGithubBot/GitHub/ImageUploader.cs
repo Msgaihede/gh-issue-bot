@@ -27,7 +27,8 @@ public interface IImageUploader
 /// undocumented, so any failure there is a warning and a fall-through, never fatal. Tier 2 is the official
 /// Contents API, committing the image to an <c>issue-assets</c> branch and linking raw.githubusercontent.com.
 /// </summary>
-public sealed class GitHubImageUploader(HttpClient http, ILogger<GitHubImageUploader> logger) : IImageUploader
+public sealed class GitHubImageUploader(
+    HttpClient http, IGitHubAuthProvider auth, ILogger<GitHubImageUploader> logger) : IImageUploader
 {
     private const string AssetsBranch = "issue-assets";
     private const string UploadsEndpoint = "https://uploads.github.com/user-attachments/assets";
@@ -74,7 +75,7 @@ public sealed class GitHubImageUploader(HttpClient http, ILogger<GitHubImageUplo
         var url = $"{UploadsEndpoint}?name={Uri.EscapeDataString(fileName)}&repository_id={repositoryId}";
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", app.GitHubToken);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await auth.GetTokenAsync(app, ct));
         req.Content = new ByteArrayContent(bytes);
         // Parse, not the constructor: Discord reports content types with parameters
         // ("image/png; charset=utf-8"), and the constructor rejects anything but a bare media type —
@@ -208,7 +209,7 @@ public sealed class GitHubImageUploader(HttpClient http, ILogger<GitHubImageUplo
         AppConfig app, HttpMethod method, string path, object? payload, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(method, path);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", app.GitHubToken);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await auth.GetTokenAsync(app, ct));
         if (payload is not null)
             req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 

@@ -13,13 +13,17 @@ public class GitHubServiceTests
         GuildIds = [1UL], ChannelIds = [2UL],
     };
 
+    /// <summary>The PAT path through the auth provider: the token the app configures is the token sent.</summary>
+    private static GitHubService Service(FakeHttpMessageHandler fake) =>
+        new(fake.CreateClient(), new PassThroughAuthProvider());
+
     [Fact]
     public async Task CreateIssue_posts_title_body_label_and_bearer_token()
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Created,
             """{"number":42,"title":"T","body":"B","state":"open","updated_at":"2026-08-18T00:00:00Z","closed_at":null,"html_url":"https://github.com/owner/repo/issues/42"}""");
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
 
         var issue = await svc.CreateIssueAsync(App, "T", "B", "bug");
 
@@ -37,7 +41,7 @@ public class GitHubServiceTests
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues/7/comments", HttpStatusCode.Created,
             """{"html_url":"https://github.com/owner/repo/issues/7#issuecomment-1"}""");
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
 
         var url = await svc.AddCommentAsync(App, 7, "hello");
 
@@ -49,7 +53,7 @@ public class GitHubServiceTests
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues/7/comments", HttpStatusCode.Created, """{"id":1}""");
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => svc.AddCommentAsync(App, 7, "hello"));
 
@@ -68,7 +72,7 @@ public class GitHubServiceTests
               {"number":3,"title":"Bug B","body":null,"state":"closed","updated_at":"2026-08-02T10:00:00Z","closed_at":"2026-08-02T10:00:00Z","html_url":"u3"}
             ]
             """);
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
 
         var issues = await svc.ListIssuesAsync(App, "all", null);
 
@@ -83,7 +87,7 @@ public class GitHubServiceTests
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Get, "repos/owner/repo/issues?", HttpStatusCode.OK, "[]");
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
 
         await svc.ListIssuesAsync(App, "all", new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
 
@@ -98,7 +102,7 @@ public class GitHubServiceTests
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Unauthorized, "{}");
-        var svc = new GitHubService(fake.CreateClient());
+        var svc = Service(fake);
         await Assert.ThrowsAsync<HttpRequestException>(() => svc.CreateIssueAsync(App, "t", "b", "bug"));
     }
 }

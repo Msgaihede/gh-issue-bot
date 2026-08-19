@@ -39,6 +39,12 @@ if (args is ["--smoke-upload", var repo])
 {
     var app = options.AppByRepo(repo);
     if (app is null) { Console.Error.WriteLine($"No configured app for repo '{repo}'."); return 1; }
+    // Which credentials the upload runs under is the whole question the smoke test answers: the
+    // user-attachments endpoint is undocumented, so whether it accepts an App installation token is
+    // something only a real run can say.
+    Console.WriteLine($"Smoke upload to {app.Repo} — auth: " +
+        (app.GitHubApp is null ? "PAT" : "GitHub App (installation token)"));
+
     var uploader = host.Services.GetRequiredService<IImageUploader>();
     var png = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
