@@ -89,6 +89,8 @@ public class GitHubAuthProviderTests : IDisposable
 
         await Provider(fake).GetTokenAsync(GitHubApp());
 
+        var after = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
         var authHeader = Assert.Single(fake.Requests).AuthHeader;
         Assert.StartsWith("Bearer ", authHeader);
         var segments = authHeader!["Bearer ".Length..].Split('.');
@@ -102,8 +104,11 @@ public class GitHubAuthProviderTests : IDisposable
         var iat = payload.RootElement.GetProperty("iat").GetInt64();
         var exp = payload.RootElement.GetProperty("exp").GetInt64();
         Assert.Equal(AppId, payload.RootElement.GetProperty("iss").GetInt64());
-        Assert.Equal(600, exp - iat);                     // GitHub rejects anything over ten minutes
-        Assert.InRange(iat, before - 61, before - 59);    // backdated by the clock-skew allowance
+        Assert.Equal(600, exp - iat);                  // GitHub rejects anything over ten minutes
+        // Backdated by exactly the 60 s clock-skew allowance from whenever the JWT was minted, which
+        // is somewhere between `before` and `after`. Anchoring on `before` alone flaked on CI: a cold
+        // runner spends seconds on JIT and RSA before minting, pushing iat past a ±1 s window.
+        Assert.InRange(iat, before - 60, after - 60);
 
         // The signature is the whole point: a JWT GitHub cannot verify is a 401 nobody sees until prod.
         Assert.True(_key.VerifyData(
