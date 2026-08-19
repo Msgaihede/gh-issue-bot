@@ -103,6 +103,29 @@ public sealed class IssueSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_marker_pasted_into_a_report_cannot_hide_the_rest_of_it()
+    {
+        // The composer strips literal markers out of the draft, so the only marker in a composed body is
+        // the one it emits — and the cut lands after the whole report rather than in the middle of it.
+        var draft = $"Before.\n\n{IssueBodyComposer.MetaMarker}\n\nAfter.";
+        var composed = IssueBodyComposer.ComposeIssueBody(draft, "markus", "Acme HQ", [], [], null);
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
+            .Returns([Issue(1, title: "T", body: composed)]);
+
+        await _sut.SyncAsync(App);
+
+        // Both halves of the report survive the cut, the pasted marker does not, and the real marker
+        // still keeps the footer out. (Removing the marker leaves the blank lines that surrounded it,
+        // which markdown collapses into the one paragraph break it already was.)
+        var embedded = Assert.Single(_embedder.Inputs);
+        Assert.Contains("Before.", embedded);
+        Assert.Contains("After.", embedded);
+        Assert.DoesNotContain(IssueBodyComposer.MetaMarker, embedded);
+        Assert.DoesNotContain("Created by", embedded);
+        Assert.Contains("After.", _db.IssueEmbeddings.Single().BodyExcerpt);
+    }
+
+    [Fact]
     public async Task A_human_authored_body_is_embedded_whole()
     {
         // No marker means nothing to strip — an issue filed by hand, or filed before the marker

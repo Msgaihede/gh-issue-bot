@@ -17,6 +17,13 @@ public static class IssueBodyComposer
     /// comment is invisible in GitHub's rendered markdown, so the marker costs the reader nothing —
     /// and <see cref="IssueSyncService"/> uses it to keep the boilerplate out of issue embeddings,
     /// which would otherwise make every bot-created issue look alike.
+    /// <para>
+    /// A composed body contains this marker exactly once, and it is always the one
+    /// <see cref="Compose"/> emits: any literal marker inside the draft is stripped first. The
+    /// invariant therefore holds by construction rather than by emission order — a reporter who pastes
+    /// the marker into their report cannot move the cut, and so cannot hide the rest of their own text
+    /// from the embedding, the content hash and the duplicate judge's excerpt.
+    /// </para>
     /// </summary>
     public const string MetaMarker = "<!-- discord-gh-issue-bot:meta -->";
 
@@ -49,7 +56,11 @@ public static class IssueBodyComposer
     {
         var sb = new StringBuilder();
 
-        var draft = draftBody.Trim();
+        // The marker means "the bot's words start here", so the draft is not allowed to contain one:
+        // the reporter's text is attacker-chosen, and a pasted marker would otherwise cut the body
+        // short of everything after it. Stripped before the trim, so a draft that is nothing but a
+        // marker still counts as empty.
+        var draft = draftBody.Replace(MetaMarker, "").Trim();
         if (draft.Length > 0) AppendBlock(sb, draft);
 
         // Unconditional, and ahead of every appended block including the regression line: the footer

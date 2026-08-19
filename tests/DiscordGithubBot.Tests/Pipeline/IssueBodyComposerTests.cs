@@ -46,6 +46,42 @@ public class IssueBodyComposerTests
     }
 
     [Fact]
+    public void A_marker_pasted_into_the_draft_is_stripped_rather_than_honoured()
+    {
+        // The reporter's text is attacker-chosen. A literal marker inside it would otherwise be the
+        // *first* one in the composed body, moving the cut IssueSyncService makes and hiding the rest
+        // of the report from the embedding, the content hash and the judge's excerpt.
+        var draft = $"Before.\n\n{IssueBodyComposer.MetaMarker}\n\nAfter.";
+
+        var body = IssueBodyComposer.ComposeIssueBody(draft, "markus", "Acme HQ", [], [], null);
+
+        Assert.Equal(1, CountMarkers(body));
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        Assert.Contains("Before.", body[..marker]);
+        Assert.Contains("After.", body[..marker]);
+        Assert.Contains("_Created by", body[marker..]);
+    }
+
+    [Fact]
+    public void A_draft_that_is_nothing_but_a_marker_composes_as_an_empty_draft()
+    {
+        var body = IssueBodyComposer.ComposeCommentBody(
+            $"  {IssueBodyComposer.MetaMarker}  ", "markus", "Acme HQ", [], []);
+
+        Assert.StartsWith(IssueBodyComposer.MetaMarker, body);
+        Assert.Equal(1, CountMarkers(body));
+    }
+
+    private static int CountMarkers(string body)
+    {
+        var count = 0;
+        for (var i = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal); i >= 0;
+             i = body.IndexOf(IssueBodyComposer.MetaMarker, i + 1, StringComparison.Ordinal))
+            count++;
+        return count;
+    }
+
+    [Fact]
     public void Comment_bodies_are_marked_too()
     {
         var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);
