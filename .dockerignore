@@ -1,0 +1,19 @@
+# build output at any depth: the host's obj/ carries Windows paths that break a Linux restore
+**/bin/
+**/obj/
+
+# local state, never part of an image
+db/
+secrets/
+.env
+
+# tooling and repo noise
+.git/
+.vs/
+.superpowers/
+TestResults/
+
+# not needed to build or run the bot
+docs/
+tests/
+*.md
