@@ -19,18 +19,23 @@ public sealed class IssueSyncServiceTests : IDisposable
     private readonly FakeEmbeddingGenerator _embedder = new();
     private readonly IssueSyncService _sut;
 
+    private const string Model = "text-embedding-3-small";
+
     private static readonly AppConfig App = new()
     {
         Name = "MyApp", Repo = "owner/repo", GitHubToken = "p",
         GuildIds = [1UL], ChannelIds = [2UL],
     };
 
+    private static BotOptions Options(string embeddingModel = Model) =>
+        new() { OpenAI = { EmbeddingModel = embeddingModel } };
+
     public IssueSyncServiceTests()
     {
         _conn.Open();
         _db = new BotDbContext(new DbContextOptionsBuilder<BotDbContext>().UseSqlite(_conn).Options);
         _db.Database.EnsureCreated();
-        _sut = new IssueSyncService(_db, _gitHub, _embedder, NullLogger<IssueSyncService>.Instance);
+        _sut = new IssueSyncService(_db, _gitHub, _embedder, Options(), NullLogger<IssueSyncService>.Instance);
     }
 
     private static GitHubIssue Issue(int n, string title = "t", string body = "b", string state = "open",
@@ -63,6 +68,10 @@ public sealed class IssueSyncServiceTests : IDisposable
 
         Assert.Equal(1, _db.IssueEmbeddings.Count());
         Assert.Single(_embedder.Inputs); // no second embedding call
+
+        // The model-heal pass runs on every sync; a row already stamped with the configured model
+        // must cost nothing there either.
+        Assert.Equal(Model, _db.IssueEmbeddings.Single().EmbeddingModel);
     }
 
     [Fact]
@@ -176,16 +185,81 @@ public sealed class IssueSyncServiceTests : IDisposable
     public async Task Candidates_include_open_and_recently_closed_but_prune_old_closed()
     {
         _db.IssueEmbeddings.AddRange(
-            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 1, Title = "open", State = "open", ContentHash = "h", Vector = [1f] },
-            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 2, Title = "recent", State = "closed", ClosedAtUtc = DateTime.UtcNow.AddDays(-5), ContentHash = "h", Vector = [1f] },
-            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 3, Title = "old", State = "closed", ClosedAtUtc = DateTime.UtcNow.AddDays(-45), ContentHash = "h", Vector = [1f] },
-            new IssueEmbedding { RepoKey = "other/repo", IssueNumber = 4, Title = "foreign", State = "open", ContentHash = "h", Vector = [1f] });
+            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 1, Title = "open", State = "open", ContentHash = "h", Vector = [1f], EmbeddingModel = Model },
+            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 2, Title = "recent", State = "closed", ClosedAtUtc = DateTime.UtcNow.AddDays(-5), ContentHash = "h", Vector = [1f], EmbeddingModel = Model },
+            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 3, Title = "old", State = "closed", ClosedAtUtc = DateTime.UtcNow.AddDays(-45), ContentHash = "h", Vector = [1f], EmbeddingModel = Model },
+            new IssueEmbedding { RepoKey = "other/repo", IssueNumber = 4, Title = "foreign", State = "open", ContentHash = "h", Vector = [1f], EmbeddingModel = Model });
         await _db.SaveChangesAsync();
 
         var candidates = await _sut.GetCandidatesAsync("owner/repo");
 
         Assert.Equal([1, 2], candidates.Select(c => c.IssueNumber).Order().ToArray());
         Assert.Null(await _db.IssueEmbeddings.SingleOrDefaultAsync(e => e.IssueNumber == 3)); // pruned
+    }
+
+    [Fact]
+    public async Task New_embeddings_are_stamped_with_the_model_that_produced_them()
+    {
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
+            .Returns([Issue(1), Issue(2, title: "other")]);
+
+        await _sut.SyncAsync(App);
+
+        Assert.All(_db.IssueEmbeddings, e => Assert.Equal(Model, e.EmbeddingModel));
+    }
+
+    [Fact]
+    public async Task Candidates_exclude_rows_embedded_by_another_model()
+    {
+        // Vectors from two models share no coordinate space, so the mismatched row is not a candidate
+        // — but it stays in the cache, because the next sync re-embeds it rather than refetching it.
+        _db.IssueEmbeddings.AddRange(
+            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 1, Title = "current", State = "open", ContentHash = "h", Vector = [1f], EmbeddingModel = Model },
+            new IssueEmbedding { RepoKey = "owner/repo", IssueNumber = 2, Title = "legacy", State = "open", ContentHash = "h", Vector = [1f], EmbeddingModel = "text-embedding-ada-002" });
+        await _db.SaveChangesAsync();
+
+        var candidates = await _sut.GetCandidatesAsync("owner/repo");
+
+        Assert.Equal([1], candidates.Select(c => c.IssueNumber).ToArray());
+        Assert.Equal(2, _db.IssueEmbeddings.Count());
+    }
+
+    [Fact]
+    public async Task Switching_the_embedding_model_reembeds_stored_rows_even_when_github_returns_nothing()
+    {
+        _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>()).Returns([Issue(1)]);
+        await _sut.SyncAsync(App);
+        var hashBefore = _db.IssueEmbeddings.Single().ContentHash;
+
+        // Another repo's row is on the old model too; syncing this app must leave it alone.
+        _db.IssueEmbeddings.Add(new IssueEmbedding
+        {
+            RepoKey = "other/repo", IssueNumber = 9, Title = "foreign", State = "open",
+            ContentHash = "h", Vector = [1f], EmbeddingModel = Model,
+        });
+        await _db.SaveChangesAsync();
+
+        // The operator switches models and restarts. GitHub has nothing new since the watermark, so
+        // the incremental pass alone would never look at issue 1 again.
+        const string newModel = "text-embedding-3-large";
+        var sut = new IssueSyncService(
+            _db, _gitHub, _embedder, Options(newModel), NullLogger<IssueSyncService>.Instance);
+        _gitHub.ListIssuesAsync(App, "all", Arg.Is<DateTime?>(d => d != null), Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        await sut.SyncAsync(App);
+
+        var row = _db.IssueEmbeddings.Single(e => e.RepoKey == "owner/repo");
+        Assert.Equal(newModel, row.EmbeddingModel);
+        Assert.Equal(hashBefore, row.ContentHash); // the text never changed, only the model did
+        Assert.Equal(2, _embedder.Inputs.Count);
+        Assert.Equal("t\n\nb", _embedder.Inputs[1]); // re-embedded from the stored title + excerpt
+        Assert.Equal(Model, _db.IssueEmbeddings.Single(e => e.RepoKey == "other/repo").EmbeddingModel);
+
+        // Healed rows are candidates again, and a second sync finds nothing left to heal.
+        Assert.Single(await sut.GetCandidatesAsync("owner/repo"));
+        await sut.SyncAsync(App);
+        Assert.Equal(2, _embedder.Inputs.Count);
     }
 
     [Fact]
@@ -208,7 +282,7 @@ public sealed class IssueSyncServiceTests : IDisposable
     {
         var embedder = new FailingEmbedder(failOnCall: 3);
         var sut = new IssueSyncService(
-            _db, _gitHub, embedder, NullLogger<IssueSyncService>.Instance, saveBatchSize: 2);
+            _db, _gitHub, embedder, Options(), NullLogger<IssueSyncService>.Instance, saveBatchSize: 2);
         _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>())
             .Returns([Issue(1), Issue(2), Issue(3), Issue(4)]);
 
@@ -228,7 +302,8 @@ public sealed class IssueSyncServiceTests : IDisposable
     public async Task Cancellation_propagates_and_leaves_no_half_written_rows_tracked()
     {
         using var cts = new CancellationTokenSource();
-        var sut = new IssueSyncService(_db, _gitHub, new CancellingEmbedder(cts), NullLogger<IssueSyncService>.Instance);
+        var sut = new IssueSyncService(
+            _db, _gitHub, new CancellingEmbedder(cts), Options(), NullLogger<IssueSyncService>.Instance);
         _gitHub.ListIssuesAsync(App, "all", null, Arg.Any<CancellationToken>()).Returns([Issue(1)]);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.SyncAsync(App, cts.Token));

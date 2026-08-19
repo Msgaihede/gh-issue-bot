@@ -888,3 +888,42 @@ document that contradicts itself.
     carries the installation token) now calls
     `RedactLoggedHeaders(["Authorization"])`. It is one call per registration
     and costs nothing at runtime when the log level is off.
+
+## 2026-08-19 (embedding model tag)
+
+68. **Stored vectors carry the model that produced them, and a mismatch is
+    re-embedded rather than compared.** `IssueEmbedding` gains an
+    `EmbeddingModel` column holding the OpenAI model id that produced `Vector`.
+    Embeddings from two different models share no coordinate space, so a cosine
+    similarity computed across them is a number with no meaning — and nothing in
+    the old code could tell the two apart: changing `OpenAI:EmbeddingModel`
+    left every cached vector in place and the duplicate ranking silently became
+    noise, with no error, no log line and no way to notice except by watching
+    the verdicts get worse. `IssueSyncService` now reads the configured model
+    from `BotOptions`, stamps it on every row it embeds (alongside the content
+    hash, and only once the vector is in hand, so a failed call never claims a
+    provenance it does not have), re-embeds on `hash changed OR model changed`,
+    and `GetCandidatesAsync` filters mismatched rows out of the candidate list
+    instead of ranking them.
+    Excluding them alone would not heal them: sync fetches only issues updated
+    since the watermark, so after a model switch an issue nobody touches would
+    stay excluded forever and the candidate list would quietly shrink to
+    whatever GitHub happened to bump. `SyncAsync` therefore ends with a heal
+    pass over this repo's mismatched rows, batched and flushed exactly like the
+    main loop and equally free to fail — the watermark is untouched by it, so a
+    partial pass is simply finished by the next sync. The pass re-embeds from
+    the stored `Title` and `BodyExcerpt` rather than refetching from GitHub: for
+    an issue whose body fits the 1000-character excerpt (nearly all of them) the
+    text is exactly what a fresh sync would send, and a longer one gets a vector
+    built from its opening until its next real edit re-embeds it in full — the
+    cost of a full resync on every model change was not worth those tail
+    characters. The main loop is flushed before the pass runs, or a row embedded
+    seconds earlier would read back as stale and be paid for twice.
+    Like decisions 52 and 59, the column ships **without a migration**:
+    `EnsureCreated()` creates missing tables but never alters an existing one,
+    so anyone running an older build must delete their SQLite file again (it
+    holds only a rebuildable embedding cache and drafts younger than an hour) or
+    the first query against `IssueEmbeddings` will fail on the missing column.
+    Rows written by a build from before this change would carry an empty model
+    string, which the heal pass treats as a mismatch and re-embeds — but that
+    path only matters to a database that survives, and this one does not.

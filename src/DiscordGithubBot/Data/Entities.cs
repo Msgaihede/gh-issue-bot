@@ -34,6 +34,13 @@ public class IssueEmbedding
 
     /// <summary>Embedding vector; persisted as a BLOB via <see cref="VectorConversion"/>.</summary>
     public float[] Vector { get; set; } = [];
+
+    /// <summary>
+    /// The OpenAI model id that produced <see cref="Vector"/>. Vectors from different models share no
+    /// coordinate space, so a row whose model no longer matches the configured one is not a comparable
+    /// candidate; sync re-embeds it instead.
+    /// </summary>
+    public string EmbeddingModel { get; set; } = "";
 }
 
 /// <summary>A drafted issue awaiting the reporter's confirmation.</summary>

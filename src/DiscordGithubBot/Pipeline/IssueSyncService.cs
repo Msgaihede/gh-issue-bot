@@ -11,25 +11,33 @@ namespace DiscordGithubBot.Pipeline;
 
 public interface IIssueSyncService
 {
-    /// <summary>Incrementally refreshes the embedding cache for the app's repo. Never throws on GitHub/embedding failure — logs and leaves the cache stale.</summary>
+    /// <summary>Incrementally refreshes the embedding cache for the app's repo, and re-embeds any rows left behind by an earlier embedding model. Never throws on GitHub/embedding failure — logs and leaves the cache stale.</summary>
     Task SyncAsync(AppConfig app, CancellationToken ct = default);
 
-    /// <summary>Candidates for dedup: open issues plus issues closed within the last 30 days. Prunes older closed rows.</summary>
+    /// <summary>Candidates for dedup: open issues plus issues closed within the last 30 days, embedded by the configured model. Prunes older closed rows.</summary>
     Task<IReadOnlyList<IssueEmbedding>> GetCandidatesAsync(string repoKey, CancellationToken ct = default);
 }
 
 /// <summary>
 /// Keeps the cached issue embeddings for a repository in step with GitHub. Sync is incremental
-/// (GitHub's <c>since</c> filter) and re-embeds only issues whose title or body actually changed,
-/// so a routine sync costs one GitHub call and no embedding calls. "Body" here means the reporter's
-/// half of it — see <see cref="SemanticBody"/>.
+/// (GitHub's <c>since</c> filter) and re-embeds only issues whose title or body actually changed —
+/// or whose vector came from a model that is no longer the configured one — so a routine sync costs
+/// one GitHub call and no embedding calls. "Body" here means the reporter's half of it — see
+/// <see cref="SemanticBody"/>.
 /// </summary>
 public sealed class IssueSyncService(
     BotDbContext db, IGitHubService gitHub,
     IEmbeddingGenerator<string, Embedding<float>> embedder,
+    BotOptions options,
     ILogger<IssueSyncService> logger,
     int saveBatchSize = IssueSyncService.DefaultSaveBatchSize) : IIssueSyncService
 {
+    /// <summary>
+    /// The model every usable vector in the cache came from. Read once: the configured value cannot
+    /// change without a restart, and a mid-sync change would leave half a pass stamped either way.
+    /// </summary>
+    private readonly string _embeddingModel = options.OpenAI.EmbeddingModel;
+
     /// <summary>
     /// How many upserted issues are flushed at a time. A first sync of a busy repository is hundreds of
     /// embedding calls long, and without an intermediate flush a rate limit near the end would throw away
@@ -77,6 +85,11 @@ public sealed class IssueSyncService(
                 sinceLastSave = 0;
             }
 
+            // Flushed before the heal pass so its query sees the rows this loop just stamped; on a
+            // stale read they would look mismatched and be paid for a second time.
+            await db.SaveChangesAsync(ct);
+            var healed = await ReembedMismatchedModelsAsync(repoKey, ct);
+
             if (state is null)
                 db.RepoSyncStates.Add(new RepoSyncState { RepoKey = repoKey, LastSyncUtc = syncStartUtc });
             else
@@ -85,7 +98,9 @@ public sealed class IssueSyncService(
             // The watermark moves only here, once every issue in the window is embedded and stored:
             // a sync that failed half way must be repeated in full, not skipped as already done.
             await db.SaveChangesAsync(ct);
-            logger.LogDebug("Synced {Count} issue(s) for {Repo}.", issues.Count, repoKey);
+            logger.LogDebug(
+                "Synced {Count} issue(s) for {Repo}; re-embedded {Healed} row(s) left by an earlier model.",
+                issues.Count, repoKey, healed);
         }
         // Only a genuine cancellation of *our* token escapes: an HttpClient timeout also surfaces as
         // a TaskCanceledException, and that is an ordinary GitHub failure the cache should absorb.
@@ -111,10 +126,47 @@ public sealed class IssueSyncService(
             .Where(e => e.State == "closed" && e.ClosedAtUtc != null && e.ClosedAtUtc < cutoff)
             .ExecuteDeleteAsync(ct);
 
+        // Rows carrying another model's vector are left out rather than ranked: cosine similarity
+        // between two models' embeddings is a number without a meaning, and a silently wrong ranking
+        // is worse than a short candidate list. The next sync re-embeds them back into the list.
         var key = NormalizeRepoKey(repoKey);
         return await db.IssueEmbeddings.AsNoTracking()
-            .Where(e => e.RepoKey == key)
+            .Where(e => e.RepoKey == key && e.EmbeddingModel == _embeddingModel)
             .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Re-embeds this repo's rows whose vectors came from a different model, and returns how many.
+    /// Sync only fetches issues updated since the watermark, so switching the configured model would
+    /// otherwise leave every untouched issue out of <see cref="GetCandidatesAsync"/> forever — the
+    /// cache would quietly shrink to whatever GitHub happened to touch since the switch. Re-embedding
+    /// uses the stored title and body excerpt rather than a second GitHub pass: for the issues that
+    /// fit the excerpt (nearly all of them) the text is exactly what a fresh sync would send, and a
+    /// longer issue gets a vector built from its first 1000 body characters until its next real edit
+    /// re-embeds it in full. Batched and flushed like the main loop, and equally free to fail: the
+    /// caller's catch leaves the watermark where it was, so the next sync picks the rest up.
+    /// </summary>
+    private async Task<int> ReembedMismatchedModelsAsync(string repoKey, CancellationToken ct)
+    {
+        var stale = await db.IssueEmbeddings
+            .Where(e => e.RepoKey == repoKey && e.EmbeddingModel != _embeddingModel)
+            .ToListAsync(ct);
+
+        var sinceLastSave = 0;
+        foreach (var row in stale)
+        {
+            // The hash describes text that has not changed, so it is carried across unchanged; only
+            // the vector and the model stamp move.
+            await EmbedAsync(row, row.Title, row.BodyExcerpt, row.ContentHash, ct);
+
+            if (++sinceLastSave < saveBatchSize) continue;
+
+            await db.SaveChangesAsync(ct);
+            sinceLastSave = 0;
+        }
+
+        // The tail rides along on the watermark save, exactly as the main loop's does.
+        return stale.Count;
     }
 
     /// <summary>
@@ -158,7 +210,9 @@ public sealed class IssueSyncService(
             rows[issue.Number] = row;
             await EmbedAsync(row, issue.Title, body, hash, ct);
         }
-        else if (row.ContentHash != hash)
+        // A row embedded by a different model is re-embedded even though its text is unchanged: the
+        // vector, not the content, is what went stale.
+        else if (row.ContentHash != hash || row.EmbeddingModel != _embeddingModel)
         {
             await EmbedAsync(row, issue.Title, body, hash, ct);
         }
@@ -196,9 +250,11 @@ public sealed class IssueSyncService(
         var vector = await embedder.GenerateVectorAsync(text, cancellationToken: ct);
         row.Vector = vector.ToArray();
 
-        // The hash advances only once the vector it describes is in hand, so a failed embedding
-        // leaves the row looking stale and the next sync retries it instead of skipping it forever.
+        // The hash and the model stamp advance only once the vector they describe is in hand, so a
+        // failed embedding leaves the row looking stale and the next sync retries it instead of
+        // skipping it forever — and never claims a vector came from a model that never produced it.
         row.ContentHash = hash;
+        row.EmbeddingModel = _embeddingModel;
     }
 
     /// <summary>Repo keys are stored lowercase so lookups never depend on how the repo was configured.</summary>

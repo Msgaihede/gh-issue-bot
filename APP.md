@@ -49,7 +49,10 @@ issues are also announced publicly in the app's configured channel(s).
    body only: a hidden marker separates it from the generated tail (footer,
    screenshots, notes), which is cut off before hashing, embedding and
    excerpting, so two reports never look alike merely for both having come
-   through Discord.
+   through Discord. Every cached vector is tagged with the model that produced
+   it: changing the configured embedding model makes the old vectors
+   incomparable, so they drop out of the candidate list and the next sync
+   re-embeds them rather than ranking them against the new one.
 6. **LLM verdict.** Those candidates, plus the normalized report, go back to
    the chat model for a structured verdict: a specific duplicate, an
    uncertain set of candidates, or no match. A parse failure degrades safely

@@ -26,6 +26,9 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 ## Gotchas
 - Chat model must be `gpt-5.6-luna` — bare `gpt-5.6` routes to a 10x-cost tier.
 - Embedding dimension (1536) is defined once in VectorRanker.EmbeddingDimensions.
+- Cached vectors are stamped with `IssueEmbedding.EmbeddingModel`; rows from
+  another model are never ranked — sync re-embeds them (from the stored title +
+  body excerpt) so a model switch heals without a full resync.
 - Discord attachment URLs expire ~24h — bytes are downloaded during the modal
   handler and persisted in SQLite (PendingAttachment).
 - Never hotlink Discord CDN URLs in GitHub issue bodies.
