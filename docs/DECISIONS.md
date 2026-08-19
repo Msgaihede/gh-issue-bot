@@ -989,7 +989,7 @@ document that contradicts itself.
     noise to every subscriber. Now `AdditionalInfoExtractor` (one extra chat
     call, made only when the reporter confirms a duplicate) compares the
     draft against the matched issue and returns a tri-state: new details are
-    posted above a "Recreated/experienced by <name> in Discord server
+    posted above an "Also reported by <name> in Discord server
     <server>" footer; a report that adds nothing posts that footer line
     alone; and a failed extraction — or an issue missing from the candidate
     cache — falls back to posting the full draft as before, because a
@@ -1000,4 +1000,4 @@ document that contradicts itself.
     buried past the excerpt, or added earlier by another bot comment, can
     still be repeated. Screenshots always post — they are new information by
     nature. Issue bodies keep the "Created by" footer; only comments switch
-    to the recreated/experienced wording.
+    to the also-reported wording.

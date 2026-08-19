@@ -248,7 +248,7 @@ public class ReportPipelineTests
         await _gitHub.Received(1).AddCommentAsync(App, 7,
             Arg.Is<string>(b => b.Contains("Only the new detail.")
                 && !b.Contains("TheFullDraftBody")
-                && b.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._")),
+                && b.Contains("_Also reported by **markus** in Discord server **Acme HQ**._")),
             Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
     }
@@ -265,7 +265,7 @@ public class ReportPipelineTests
 
         await _gitHub.Received(1).AddCommentAsync(App, 7,
             Arg.Is<string>(b => !b.Contains("TheFullDraftBody")
-                && b.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._")),
+                && b.Contains("_Also reported by **markus** in Discord server **Acme HQ**._")),
             Arg.Any<CancellationToken>());
     }
 

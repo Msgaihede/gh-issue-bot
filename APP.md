@@ -81,7 +81,7 @@ issues are also announced publicly in the app's configured channel(s).
    the matched issue (its cached title and first 1000 body characters) and
    the comment carries only what the report adds — different repro steps,
    environment or version details, error messages, workarounds — above a
-   `_Recreated/experienced by **<name>** in Discord server **<server>**._`
+   `_Also reported by **<name>** in Discord server **<server>**._`
    footer. A report that adds nothing posts that footer line alone, and if
    the comparison itself fails the full draft is posted instead: dropping
    details silently would be worse than repeating them. Nothing posts
@@ -353,9 +353,9 @@ repeats what is worth repeating under a GitHub App.
    reply should be "This looks like an existing issue: #N …" with **Same
    issue — add my report** / **Not it — show my draft**. Press *Same issue —
    add my report* and confirm the comment lands on issue #N carrying only
-   what the second report added — or just the
-   "Recreated/experienced by …" line when it added nothing — with its own
-   screenshots, and that nothing is announced publicly.
+   what the second report added — or just the "Also reported by …" line
+   when it added nothing — with its own screenshots, and that nothing is
+   announced publicly.
 4. **Closed-issue path.** Close issue #N on GitHub, then report the same bug
    a third time. The reply should be "This looks like #N …, closed recently.
    Is it still happening?" with **Still happening** / **Looks fixed**. Press

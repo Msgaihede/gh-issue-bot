@@ -44,17 +44,16 @@ public static class IssueBodyComposer
     /// Composes the body of a comment added to an existing issue. The first parameter is what the
     /// report *adds* to that issue, not the report itself — the issue already says the rest. Empty
     /// means the report added nothing, which composes to the attribution line alone. The footer verb
-    /// changes with it: a comment records that someone recreated or experienced the issue, not that
-    /// they created it.
+    /// changes with it: a comment records another report of the issue, not the creation of one.
     /// </summary>
     public static string ComposeCommentBody(
         string additionalInfo, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
         Compose(additionalInfo, reporterDisplayName, guildName, images, failedUploads,
-            regressionOfIssueNumber: null, FooterVerb.RecreatedExperienced);
+            regressionOfIssueNumber: null, FooterVerb.AlsoReported);
 
-    /// <summary>How the footer credits the reporter: issues are created, comments recreate/experience.</summary>
-    private enum FooterVerb { Created, RecreatedExperienced }
+    /// <summary>How the footer credits the reporter: issues are created, comments are further reports.</summary>
+    private enum FooterVerb { Created, AlsoReported }
 
     private static string Compose(
         string draftBody, string reporterDisplayName, string guildName,
@@ -106,7 +105,7 @@ public static class IssueBodyComposer
     {
         var reporter = Escape(reporterDisplayName);
         var server = Escape(guildName);
-        var action = verb == FooterVerb.Created ? "Created" : "Recreated/experienced";
+        var action = verb == FooterVerb.Created ? "Created" : "Also reported";
 
         return server.Length == 0
             ? $"---\n_{action} by **{reporter}** via Discord._"

@@ -88,15 +88,15 @@ public class IssueBodyComposerTests
 
         var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
         Assert.True(marker > 0);
-        Assert.Contains("_Recreated/experienced by", body[marker..]);
+        Assert.Contains("_Also reported by", body[marker..]);
     }
 
     [Fact]
-    public void Comment_footer_says_recreated_experienced_not_created()
+    public void Comment_footer_says_also_reported_not_created()
     {
         var body = IssueBodyComposer.ComposeCommentBody("The new detail.", "markus", "Acme HQ", [], []);
 
-        Assert.Contains("_Recreated/experienced by **markus** in Discord server **Acme HQ**._", body);
+        Assert.Contains("_Also reported by **markus** in Discord server **Acme HQ**._", body);
         Assert.DoesNotContain("_Created by", body);
     }
 
@@ -106,7 +106,7 @@ public class IssueBodyComposerTests
         var body = IssueBodyComposer.ComposeCommentBody("", "markus", "Acme HQ", [], []);
 
         Assert.StartsWith(IssueBodyComposer.MetaMarker, body);
-        Assert.EndsWith("_Recreated/experienced by **markus** in Discord server **Acme HQ**._", body);
+        Assert.EndsWith("_Also reported by **markus** in Discord server **Acme HQ**._", body);
     }
 
     [Theory]
@@ -118,7 +118,7 @@ public class IssueBodyComposerTests
         var comment = IssueBodyComposer.ComposeCommentBody("B", "markus", guildName, [], []);
 
         Assert.Contains("_Created by **markus** via Discord._", issue);
-        Assert.Contains("_Recreated/experienced by **markus** via Discord._", comment);
+        Assert.Contains("_Also reported by **markus** via Discord._", comment);
         Assert.DoesNotContain("Discord server", issue);
         Assert.DoesNotContain("Discord server", comment);
     }
@@ -208,7 +208,7 @@ public class IssueBodyComposerTests
         var body = IssueBodyComposer.ComposeCommentBody("B", "u", "g",
             [new UploadedImage("a.png", "https://x/a")], []);
         Assert.Contains("![a.png](https://x/a)", body);
-        Assert.Contains("_Recreated/experienced by **u** in Discord server **g**._", body);
+        Assert.Contains("_Also reported by **u** in Discord server **g**._", body);
         Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
     }
 }
