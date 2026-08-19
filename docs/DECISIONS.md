@@ -759,3 +759,100 @@ document that contradicts itself.
     whose boilerplate changes (a screenshot added, a regression line, a
     renamed Discord server) no longer looks like changed content and no
     longer buys a fresh embedding call.
+
+## 2026-08-19 (GitHub App authentication)
+
+61. **An app authenticates with a PAT or with a GitHub App, and validation
+    enforces exactly one.** `AppConfig` gained an optional `GitHubApp` block
+    (`AppId`, `InstallationId`, and one of `PrivateKey`/`PrivateKeyPath`)
+    beside the existing `GitHubToken`. A GitHub App is the better identity for
+    a shared bot — issues are authored as `<app>[bot]` rather than by whoever
+    owns the token, the credential does not leave with the person, and its
+    reach is the repositories the App is installed on rather than everything
+    the token owner can see — but PATs stay first-class, because they are two
+    minutes of setup against the App flow's ten and every existing deployment
+    uses one. Both configured is a startup error rather than a precedence
+    rule: the bot would have to pick one silently and the operator would never
+    learn which, and "the PAT wins" is exactly the wrong answer for someone
+    who just added an App block and expects it to take effect. Neither
+    configured is an error naming both keys, which also keeps the pre-existing
+    "GitHubToken is required" behaviour for an app that configures nothing.
+    A configured `PrivateKeyPath` is checked for existence during the same
+    startup validation that catches a missing app id — a typo in a path should
+    not wait for the first report an hour into the run — and it is trimmed on
+    assignment for the same reason `Repo` is: a path carrying a secret file's
+    trailing newline would fail a check the value passes when you read it.
+    That makes `PrivateKeyPath` the second field to trim, narrowing decision
+    54's "only `Repo` is trimmed" to its actual rule — whitespace here is
+    silently fatal rather than merely untidy, and that is the test a field has
+    to pass. The PEM itself is left alone: `RSA.ImportFromPem` tolerates
+    surrounding whitespace, and a key is not a field to be clever with.
+
+62. **The App JWT is hand-rolled; no JWT package was added.** Authenticating
+    as a GitHub App means signing a JWT with three claims (`iat`, `exp`,
+    `iss`), a fixed header (`RS256`/`JWT`), and one `RSA.SignData` call over
+    two base64url segments — about fifteen lines using
+    `RSA.ImportFromPem` and `System.Buffers.Text.Base64Url`, both in the
+    framework. A JWT library would bring a dependency, its transitive
+    closure, and its own upgrade cadence to produce the same eighty bytes; it
+    earns its place when a service *validates* arbitrary tokens (key
+    discovery, algorithm confusion, clock policy, revocation), and none of
+    that applies to signing one fixed shape with one key we own. The token
+    shape has not changed since GitHub Apps shipped, and the test suite
+    verifies the signature against an ephemeral key rather than trusting the
+    encoding by eye. `iat` is backdated 60 seconds and the window is 600
+    seconds wide — GitHub rejects anything over ten minutes and validates
+    `iat` against its own clock, so a slightly fast local clock is a non-event
+    instead of a 401 that looks like a bad key.
+
+63. **Installation tokens are cached per app, refreshed five minutes early,
+    behind a per-app semaphore.** GitHub's installation tokens last an hour,
+    so minting one per interaction would be an extra round trip on every
+    report and a rate-limit line item for nothing. `GitHubAuthProvider` keeps
+    one token per `Repo` (the key `BotOptions` already makes unique, compared
+    case-insensitively like everywhere else) and re-mints when less than five
+    minutes remain: the margin covers a request that starts just inside the
+    window and lands just outside it. The refresh happens under a per-app
+    `SemaphoreSlim` so a burst of concurrent interactions on one repo buys one
+    token rather than one each, and the fast path reads the cached token
+    without taking the gate at all. The PEM is read from disk at most once per
+    process for the same reason. A token whose response carries no
+    `expires_at` — documented as always present, so this is the
+    shape-changed case — is used but assumed valid for only ten minutes and
+    logged as a warning, which keeps the bot running without letting a token
+    whose real lifetime we never learned go stale in the cache. Everything
+    else (a rejected exchange, a response with no token at all) throws
+    `HttpRequestException`, which is what every caller of the GitHub clients
+    already handles.
+
+64. **The auth provider is a singleton over a *named* HttpClient, not a typed
+    one.** Every other GitHub client here is a typed client, which
+    `AddHttpClient` registers as transient — correct for them, fatal for this
+    one: a transient provider would carry an empty token cache into every
+    interaction and mint a fresh token each time, which is the whole thing the
+    cache exists to prevent. So the provider is registered as an explicit
+    singleton, and the client it holds is a *named* client rather than a typed
+    one, because a typed client captured in a singleton is the documented way
+    to lose `IHttpClientFactory`'s handler rotation and, with it, DNS changes.
+    The mitigation Microsoft documents for a deliberately long-lived factory
+    client is applied instead: `SocketsHttpHandler.PooledConnectionLifetime`
+    set to two minutes (the default handler lifetime it replaces) and the
+    factory's own rotation switched off with
+    `SetHandlerLifetime(Timeout.InfiniteTimeSpan)`. `HostSetupTests` pins the
+    singleton lifetime, so a later change to a typed registration fails a test
+    rather than quietly costing a token per report.
+
+65. **A meta marker pasted into a report is stripped rather than honoured.**
+    `IssueBodyComposer` now removes any literal `MetaMarker` from the draft
+    before emitting its own, so the invariant decision 60 relies on — a
+    composed body contains exactly one marker, and it is ours — holds by
+    construction rather than by emission order. The draft is the reporter's
+    text, which makes it attacker-chosen: a pasted marker used to be the
+    *first* one in the body, and `IssueSyncService` cuts at the first, so a
+    reporter could have hidden everything after it from the embedding, the
+    content hash and the duplicate judge's excerpt. Stripping happens before
+    the trim, so a draft that is nothing but a marker still counts as empty.
+    Removing the marker leaves the blank lines that surrounded it, which
+    markdown collapses back into the one paragraph break it already was —
+    not worth a normalization pass that would touch legitimate whitespace in
+    every other report.

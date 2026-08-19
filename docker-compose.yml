@@ -12,6 +12,11 @@ services:
     secrets:
       - Discord__Token
       - OpenAI__ApiKey
+      # GitHub App private key for the first configured app: the file name is
+      # the config key, its content is the .pem GitHub gave you. Uncomment
+      # here and below (and drop Apps__0__GitHubToken) to authenticate as a
+      # GitHub App -- see APP.md, "GitHub credentials: PAT or GitHub App".
+      # - Apps__0__GitHubApp__PrivateKey
 
 volumes:
   botdata:
@@ -21,3 +26,5 @@ secrets:
     file: ./secrets/Discord__Token
   OpenAI__ApiKey:
     file: ./secrets/OpenAI__ApiKey
+  # Apps__0__GitHubApp__PrivateKey:
+  #   file: ./secrets/Apps__0__GitHubApp__PrivateKey

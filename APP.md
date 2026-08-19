@@ -146,7 +146,71 @@ overridable. Startup fails fast — every problem printed as a
 connects — if: the Discord token, OpenAI key, chat model, embedding model or
 database path is missing; there are no apps; or any app has an empty name, a
 `Repo` that isn't `owner/repo`, a repo that another app already claims (case
-insensitive), an empty GitHub token, no guild ids, or no channel ids.
+insensitive), no guild ids, no channel ids, or credentials that are not
+exactly one of the two forms described next.
+
+### GitHub credentials: PAT or GitHub App
+
+Every app authenticates one of two ways, and **exactly one** — configuring
+both, or neither, is a startup error naming the app:
+
+- **`GitHubToken`** — a personal access token. Issues are authored by the
+  human who owns the token.
+- **`GitHubApp`** — a GitHub App installation. Issues are authored by
+  `<app-name>[bot]`, which is usually what you want for a shared bot: the
+  identity is the bot's own, it does not vanish when a person leaves, and
+  permissions are scoped to the repositories the App is installed on rather
+  than to everything the token owner can reach.
+
+```json
+{
+  "Name": "MyApp",
+  "Repo": "owner/repo",
+  "GitHubApp": {
+    "AppId": 123456,
+    "InstallationId": 987654321,
+    "PrivateKey": "-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
+  },
+  "GuildIds": [111111111111111111],
+  "ChannelIds": [222222222222222222]
+}
+```
+
+Setting one up:
+
+1. **Create the App** — GitHub → Settings → Developer settings → GitHub Apps
+   → *New GitHub App*. A personal App is fine; an organization-owned one is
+   better if the repositories belong to an org. Webhooks are not used: untick
+   *Active*.
+2. **Permissions** — Repository permissions → **Issues: Read and write**
+   (creating issues and comments) and **Contents: Read and write** (the
+   tier-2 screenshot fallback commits to the `issue-assets` branch). Nothing
+   else is needed.
+3. **Install it** — the App's *Install App* tab → install on the account that
+   owns the repositories, and select the repositories you configure as apps.
+4. **Note the ids** — the **App ID** is on the App's *General* tab. The
+   **Installation ID** is the last path segment of the URL you land on after
+   installing, `…/settings/installations/<InstallationId>` (or, for an org,
+   `…/organizations/<org>/settings/installations/<InstallationId>`).
+5. **Generate a private key** — *General* → *Private keys* → *Generate a
+   private key*. GitHub downloads a `.pem` once; it cannot be re-downloaded.
+   Supply it as **either** `PrivateKey` (the PEM text itself) **or**
+   `PrivateKeyPath` (a path to the file) — again, exactly one. A path that
+   does not exist fails startup rather than the first report.
+
+With Docker secrets the natural form is `PrivateKey`, because key-per-file
+maps a file's *content* to the config key its *name* spells: a secret file
+named `Apps__0__GitHubApp__PrivateKey` whose content is the PEM binds
+directly, no path involved. `PrivateKeyPath` is for setups that mount the key
+somewhere of their own choosing —
+`Apps__0__GitHubApp__PrivateKeyPath=/run/keys/app.pem` — and for local runs
+where the `.pem` sits on disk. Both PKCS#1 (`BEGIN RSA PRIVATE KEY`, what
+GitHub hands out) and PKCS#8 PEM are accepted.
+
+Nothing else changes: the bot mints an installation access token when it
+needs one, caches it for the hour GitHub gives it, and re-mints shortly
+before it expires. There is one caveat, and it is the screenshot upload —
+see the smoke test below.
 
 ## Running locally
 
@@ -168,12 +232,23 @@ dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo
 
 It uploads a 1×1 PNG with the same code path a report uses and exits without
 starting the gateway. `owner/repo` must be one of the configured apps (its
-PAT is what gets used), and the rest of the configuration must still
-validate. Output is `SMOKE OK: <url>` (exit 0) or `SMOKE FAILED: both tiers
-failed` (exit 1); a `github.com/user-attachments/…` URL means the unofficial
-endpoint accepted the upload, a `raw.githubusercontent.com/…/issue-assets/…`
-URL means it did not and the Contents-API fallback did the work (the
-fall-through is also logged as a warning).
+own credentials are what get used), and the rest of the configuration must
+still validate. It first prints which credentials it is running under —
+`Smoke upload to owner/repo — auth: PAT` or
+`… auth: GitHub App (installation token)` — then the result:
+`SMOKE OK: <url>` (exit 0) or `SMOKE FAILED: both tiers failed` (exit 1). A
+`github.com/user-attachments/…` URL means the unofficial endpoint accepted
+the upload, a `raw.githubusercontent.com/…/issue-assets/…` URL means it did
+not and the Contents-API fallback did the work (the fall-through is also
+logged as a warning).
+
+That distinction matters most for GitHub App credentials. The tier-1
+`user-attachments` endpoint is the undocumented one behind the web UI's
+drag-and-drop (decision 3), so whether it accepts an installation token is
+not something the documentation answers — this smoke run is what answers it.
+If it does not, screenshots still work: they land on the `issue-assets`
+branch through the official Contents API instead, which is why the App needs
+**Contents: Read and write**.
 
 ## Running in Docker
 
@@ -204,6 +279,13 @@ Secrets reach the container two ways, and you can mix them:
   (one file per app index) — add each new file to both the service's
   `secrets:` list and the top-level `secrets:` block.
 
+  A GitHub App private key belongs here rather than in `.env`: drop the
+  downloaded `.pem` at `secrets/Apps__0__GitHubApp__PrivateKey` (the file
+  name is the key, its content is the PEM — no `PrivateKeyPath` needed, and
+  no way to get the newlines wrong in an env var). `docker-compose.yml`
+  ships that secret commented out; uncomment both halves to use it. The
+  numeric `AppId` and `InstallationId` are not secret and can stay in `.env`.
+
 Compose only creates the secret files it is told about, and it **fails to
 start if a referenced secret file is missing**. So the shipped
 `docker-compose.yml` is a starting point, not a requirement: if you keep
@@ -212,10 +294,11 @@ top-level `secrets:` block entirely.
 
 ## Manual verification
 
-The suite covers the logic; these six steps cover the parts only a live bot
-can prove. Run the bot with a real Discord token, a real OpenAI key and a
-real GitHub PAT for a test repository, in a guild where that repository is
-the guild's **only** configured app.
+The suite covers the logic; these seven steps cover the parts only a live bot
+can prove. Run the bot with a real Discord token, a real OpenAI key and real
+GitHub credentials for a test repository, in a guild where that repository is
+the guild's **only** configured app. Steps 1–6 are written for a PAT; step 7
+repeats what is worth repeating under a GitHub App.
 
 1. **Modal.** Run `/report-issue` in the guild. The `app` option can be left
    empty (one app is configured), and the modal opens immediately — no app
@@ -256,3 +339,14 @@ the guild's **only** configured app.
    `raw.githubusercontent.com/…/issue-assets/…` URL is still a pass — it
    records that the PAT cannot use the unofficial endpoint and that the
    Contents-API fallback engaged (the warning in the log names the reason).
+7. **GitHub App credentials.** Swap the app's `GitHubToken` for a
+   `GitHubApp` block (see "GitHub credentials" above) and restart. Run the
+   smoke test again: the first line must now read
+   `auth: GitHub App (installation token)`, and whichever URL it prints is
+   the answer to whether the unofficial endpoint accepts App tokens — record
+   it. Then repeat step 2 and confirm the issue is authored by
+   `<app-name>[bot]` rather than by you, and that the body, label, footer
+   and public announcement are unchanged. Leave the bot running past the
+   hour if you can: the second report after that point exercises the token
+   refresh, and the log says `Minted a GitHub App installation token …` once
+   per hour, not once per report.
