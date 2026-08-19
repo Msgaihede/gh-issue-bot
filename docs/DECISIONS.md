@@ -965,25 +965,18 @@ document that contradicts itself.
     `GITHUB_TOKEN` under an explicit `permissions: packages: write`, so the
     pipeline needs no configured secrets at all.
 
-## 2026-08-19 (flex service tier)
+## 2026-08-19 (flex service tier: tried and reverted)
 
-71. **Chat calls run at OpenAI's flex service tier; configurable, validated,
-    5-minute network timeout.** Both chat calls (normalization, duplicate
-    judge) are half price on flex, and the pipeline already treats a slow or
-    rejected call as an ordinary failure — the normalizer retries once and
-    reports, the judge degrades to "uncertain" — so flex costs worst-case
-    latency, never correctness. Embeddings have no tier. The tier is exposed
-    as `OpenAI:ServiceTier` (default `flex`, validated at startup against the
-    five values the API accepts) because flex is not supported on every
-    model/account combination, and that failure would otherwise brick every
-    report until a redeploy; a config change now suffices. The tier rides in
-    via `ChatOptions.RawRepresentationFactory` seeding a fresh
-    `ChatCompletionOptions` per call (the adapter mutates the seed), applied
-    once in `HostSetup` behind `ConfigureOptions` so the AI services stay
-    provider-agnostic. `OpenAIClientOptions.NetworkTimeout` rises from the
-    100-second default to 5 minutes: flex queues on spare capacity, and the
-    default would turn ordinary queuing into failures, while 5 minutes keeps
-    two normalizer attempts plus the judge inside Discord's 15-minute
-    interaction-token window. No automatic fallback to the default tier on
-    flex rejection — that would silently reintroduce full-price calls; the
-    operator opts out explicitly instead.
+71. **Chat stays on OpenAI's standard service tier; the flex rollout was
+    reverted the same day.** Commit b349652 moved both chat calls
+    (normalization, duplicate judge) to the half-price flex tier, with an
+    `OpenAI:ServiceTier` escape hatch and a 5-minute network timeout for
+    flex queuing. It was reverted before ever serving a live report: flex
+    schedules on spare capacity, so responses can queue for minutes and are
+    rejected with a 429 when capacity runs out — and both of this bot's
+    chat calls sit inside a live Discord interaction with a reporter
+    waiting, so the discount buys degradation in exactly the two calls the
+    product feels most. The revert also removes the config knob and the
+    long timeout, which existed only to serve flex. Both commits remain in
+    history; if a background or batch chat path ever appears, the rollout
+    is a cherry-pick away.

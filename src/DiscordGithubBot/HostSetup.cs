@@ -1,4 +1,3 @@
-using System.ClientModel;
 using DiscordGithubBot.Ai;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
@@ -13,10 +12,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
-
-// ServiceTier is [Experimental] in the OpenAI SDK; running chat at the flex tier is the reason we accept that.
-#pragma warning disable OPENAI001
 
 namespace DiscordGithubBot;
 
@@ -37,15 +32,6 @@ public static class HostSetup
     /// handler lifetime this replaces, so DNS changes are picked up on the same schedule as elsewhere.
     /// </summary>
     private static readonly TimeSpan AuthConnectionLifetime = TimeSpan.FromMinutes(2);
-
-    /// <summary>
-    /// Network timeout for every OpenAI call. Flex-tier chat requests queue on spare capacity, so the
-    /// client default of 100 seconds would turn ordinary queuing into failures; five minutes rides out
-    /// the queue while keeping the normalizer's two attempts plus the judge inside the 15 minutes a
-    /// deferred Discord interaction token lives. Embeddings answer in seconds on any tier — for them
-    /// this widens only the failure cap, not the latency.
-    /// </summary>
-    private static readonly TimeSpan OpenAiNetworkTimeout = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Headers whose values <c>IHttpClientFactory</c>'s own logging must replace with <c>*</c>. It logs
@@ -84,13 +70,8 @@ public static class HostSetup
 
         // AI (OpenAIClient construction is lazy and network-free; startup validation guarantees a key,
         // and the DI test passes a dummy key)
-        var openAi = new OpenAIClient(
-            new ApiKeyCredential(options.OpenAI.ApiKey),
-            new OpenAIClientOptions { NetworkTimeout = OpenAiNetworkTimeout });
-        services.AddSingleton(openAi.GetChatClient(options.OpenAI.ChatModel).AsIChatClient()
-            .AsBuilder()
-            .ConfigureOptions(o => ApplyServiceTier(o, options.OpenAI.ServiceTier))
-            .Build());
+        var openAi = new OpenAIClient(options.OpenAI.ApiKey);
+        services.AddSingleton(openAi.GetChatClient(options.OpenAI.ChatModel).AsIChatClient());
         services.AddSingleton(openAi.GetEmbeddingClient(options.OpenAI.EmbeddingModel)
             .AsIEmbeddingGenerator(VectorRanker.EmbeddingDimensions));
 
@@ -112,18 +93,6 @@ public static class HostSetup
         services.AddHostedService<MaintenanceService>();
         return services;
     }
-
-    /// <summary>
-    /// Routes a chat call at the configured OpenAI service tier by seeding the request's provider-native
-    /// options; the adapter layers the strongly-typed <see cref="ChatOptions"/> on top of the seed. The
-    /// factory builds a fresh instance per call because the adapter mutates the seed with the rest of the
-    /// request — a shared one would leak one call's state into the next.
-    /// </summary>
-    public static void ApplyServiceTier(ChatOptions chatOptions, string configuredTier) =>
-        chatOptions.RawRepresentationFactory = _ => new ChatCompletionOptions
-        {
-            ServiceTier = new ChatServiceTier(configuredTier.ToLowerInvariant()),
-        };
 
     private static void ConfigureGitHubClient(HttpClient http)
     {

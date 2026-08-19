@@ -124,8 +124,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
   "OpenAI": {
     "ApiKey": "<secret>",
     "ChatModel": "gpt-5.6-luna",
-    "EmbeddingModel": "text-embedding-3-small",
-    "ServiceTier": "flex"
+    "EmbeddingModel": "text-embedding-3-small"
   },
   "Database": { "Path": "db/app.db" },
   "Apps": [
@@ -143,24 +142,12 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 `Database:Path` is relative to the working directory (`db/app.db` by
 default); the folder is created at startup if it does not exist.
 
-`OpenAI:ServiceTier` picks the processing tier for the two chat calls
-(normalization and the duplicate judge; embeddings have no tier). The
-default, `flex`, runs them at half price on OpenAI's spare capacity: a
-response may queue for a while — the client waits up to five minutes — and
-under load OpenAI rejects the call outright instead. Both outcomes are the
-pipeline's ordinary failure modes (the normalizer retries once and then
-reports failure; the judge degrades to "is this a duplicate?"), so flex
-costs latency in the worst case, never correctness. Set `default` to buy
-back standard latency at full price; `auto`, `scale`, and `priority` are
-accepted too (case-insensitive).
-
 `Apps` is a list, not a dictionary — `owner/repo` contains a `/`, which can't
 appear in an env-var name, so a list with a unique `Repo` field stays
 overridable. Startup fails fast — every problem printed as a
 `CONFIG ERROR: <key> …` line on stderr, exit code 1, before anything
 connects — if: the Discord token, OpenAI key, chat model, embedding model or
-database path is missing; the OpenAI service tier is not one of the five
-known values; there are no apps; or any app has an empty name, a
+database path is missing; there are no apps; or any app has an empty name, a
 `Repo` that isn't `owner/repo`, a repo that another app already claims (case
 insensitive), no guild ids, no channel ids, or credentials that are not
 exactly one of the two forms described next.

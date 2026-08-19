@@ -12,20 +12,6 @@ public sealed class OpenAIOptions
     public string ApiKey { get; set; } = "";
     public string ChatModel { get; set; } = "gpt-5.6-luna";
     public string EmbeddingModel { get; set; } = "text-embedding-3-small";
-
-    private string _serviceTier = "flex";
-
-    /// <summary>
-    /// OpenAI processing tier for chat calls. "flex" (the default) runs them at half price on spare
-    /// capacity: responses may queue, and under load OpenAI rejects the call instead — both of which the
-    /// pipeline already absorbs as ordinary failures. Set "default" to buy back standard latency.
-    /// Trimmed on assignment for the same reason <see cref="AppConfig.Repo"/> is. Embeddings have no tier.
-    /// </summary>
-    public string ServiceTier
-    {
-        get => _serviceTier;
-        set => _serviceTier = value?.Trim() ?? "";
-    }
 }
 
 public sealed class DatabaseOptions
@@ -99,9 +85,6 @@ public sealed class BotOptions
     public DatabaseOptions Database { get; set; } = new();
     public List<AppConfig> Apps { get; set; } = new();
 
-    /// <summary>The tiers chat completions accept; a typo here would otherwise surface as a 400 on the first report, not at startup.</summary>
-    private static readonly string[] KnownServiceTiers = ["auto", "default", "flex", "scale", "priority"];
-
     /// <summary>
     /// Returns an empty list when the configuration is valid, otherwise one
     /// human-readable message per problem, each naming the offending config key.
@@ -114,8 +97,6 @@ public sealed class BotOptions
         if (string.IsNullOrWhiteSpace(OpenAI.ApiKey)) errors.Add("OpenAI:ApiKey is required.");
         if (string.IsNullOrWhiteSpace(OpenAI.ChatModel)) errors.Add("OpenAI:ChatModel is required.");
         if (string.IsNullOrWhiteSpace(OpenAI.EmbeddingModel)) errors.Add("OpenAI:EmbeddingModel is required.");
-        if (!KnownServiceTiers.Contains(OpenAI.ServiceTier, StringComparer.OrdinalIgnoreCase))
-            errors.Add($"OpenAI:ServiceTier: '{OpenAI.ServiceTier}' must be one of: auto, default, flex, scale, priority.");
         if (string.IsNullOrWhiteSpace(Database.Path)) errors.Add("Database:Path is required.");
         if (Apps.Count == 0) errors.Add("Apps: at least one app must be configured.");
 
