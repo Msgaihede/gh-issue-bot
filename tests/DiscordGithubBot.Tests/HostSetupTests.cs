@@ -4,7 +4,13 @@ using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Discord;
 using DiscordGithubBot.GitHub;
 using DiscordGithubBot.Pipeline;
+using DiscordGithubBot.Tests.TestDoubles;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using OpenAI.Chat;
+
+// ServiceTier is [Experimental] in the OpenAI SDK; the assertions below are the reason we accept that.
+#pragma warning disable OPENAI001
 
 namespace DiscordGithubBot.Tests;
 
@@ -85,6 +91,30 @@ public class HostSetupTests
 
         using var scope = provider.CreateScope();
         Assert.NotNull(ActivatorUtilities.CreateInstance<ReportInteractionModule>(scope.ServiceProvider));
+    }
+
+    [Fact]
+    public void The_service_tier_factory_seeds_openai_options_with_the_configured_tier()
+    {
+        var chatOptions = new ChatOptions();
+        HostSetup.ApplyServiceTier(chatOptions, "FLEX");
+
+        Assert.NotNull(chatOptions.RawRepresentationFactory);
+        using var client = new FakeChatClient();
+        var raw = Assert.IsType<ChatCompletionOptions>(chatOptions.RawRepresentationFactory(client));
+        Assert.Equal(ChatServiceTier.Flex, raw.ServiceTier);
+    }
+
+    /// <summary>The adapter mutates the seed with the rest of the request, so a shared instance would leak one call's state into the next.</summary>
+    [Fact]
+    public void The_service_tier_factory_returns_a_fresh_instance_per_call()
+    {
+        var chatOptions = new ChatOptions();
+        HostSetup.ApplyServiceTier(chatOptions, "flex");
+
+        Assert.NotNull(chatOptions.RawRepresentationFactory);
+        using var client = new FakeChatClient();
+        Assert.NotSame(chatOptions.RawRepresentationFactory(client), chatOptions.RawRepresentationFactory(client));
     }
 
     /// <summary>Discovery itself must survive the same validated container, from inside a scope.</summary>

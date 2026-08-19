@@ -38,6 +38,43 @@ public class BotOptionsTests
     }
 
     [Fact]
+    public void The_service_tier_defaults_to_flex() => Assert.Equal("flex", new OpenAIOptions().ServiceTier);
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("turbo")]
+    [InlineData("flexible")]
+    public void An_unknown_service_tier_is_reported(string tier)
+    {
+        var o = Valid(); o.OpenAI.ServiceTier = tier;
+        Assert.Contains(o.Validate(), e => e.Contains("OpenAI:ServiceTier"));
+    }
+
+    [Theory]
+    [InlineData("auto")]
+    [InlineData("default")]
+    [InlineData("flex")]
+    [InlineData("scale")]
+    [InlineData("priority")]
+    [InlineData("FLEX")]
+    [InlineData("Default")]
+    public void Known_service_tiers_validate_case_insensitively(string tier)
+    {
+        var o = Valid(); o.OpenAI.ServiceTier = tier;
+        Assert.Empty(o.Validate());
+    }
+
+    [Fact]
+    public void A_service_tier_from_a_secret_file_is_trimmed_on_assignment()
+    {
+        var o = Valid();
+        o.OpenAI.ServiceTier = " flex\n";
+
+        Assert.Equal("flex", o.OpenAI.ServiceTier);
+        Assert.Empty(o.Validate());
+    }
+
+    [Fact]
     public void No_apps_is_reported()
     {
         var o = Valid(); o.Apps.Clear();

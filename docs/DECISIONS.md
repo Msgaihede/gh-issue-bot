@@ -964,3 +964,26 @@ document that contradicts itself.
     what the operator runs) and authenticates to ghcr.io with the workflow's
     `GITHUB_TOKEN` under an explicit `permissions: packages: write`, so the
     pipeline needs no configured secrets at all.
+
+## 2026-08-19 (flex service tier)
+
+71. **Chat calls run at OpenAI's flex service tier; configurable, validated,
+    5-minute network timeout.** Both chat calls (normalization, duplicate
+    judge) are half price on flex, and the pipeline already treats a slow or
+    rejected call as an ordinary failure — the normalizer retries once and
+    reports, the judge degrades to "uncertain" — so flex costs worst-case
+    latency, never correctness. Embeddings have no tier. The tier is exposed
+    as `OpenAI:ServiceTier` (default `flex`, validated at startup against the
+    five values the API accepts) because flex is not supported on every
+    model/account combination, and that failure would otherwise brick every
+    report until a redeploy; a config change now suffices. The tier rides in
+    via `ChatOptions.RawRepresentationFactory` seeding a fresh
+    `ChatCompletionOptions` per call (the adapter mutates the seed), applied
+    once in `HostSetup` behind `ConfigureOptions` so the AI services stay
+    provider-agnostic. `OpenAIClientOptions.NetworkTimeout` rises from the
+    100-second default to 5 minutes: flex queues on spare capacity, and the
+    default would turn ordinary queuing into failures, while 5 minutes keeps
+    two normalizer attempts plus the judge inside Discord's 15-minute
+    interaction-token window. No automatic fallback to the default tier on
+    flex rejection — that would silently reintroduce full-price calls; the
+    operator opts out explicitly instead.

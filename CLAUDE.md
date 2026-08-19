@@ -27,6 +27,12 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 
 ## Gotchas
 - Chat model must be `gpt-5.6-luna` — bare `gpt-5.6` routes to a 10x-cost tier.
+- Chat calls run at OpenAI's **flex** service tier (`OpenAI:ServiceTier`,
+  default `flex`, validated at startup): half price, but responses queue and
+  can be rejected under load — the pipeline's retry/degrade paths absorb that,
+  and the OpenAI network timeout is 5 minutes for the same reason. Embeddings
+  have no tier. The SDK marks `ServiceTier` `[Experimental]`; HostSetup and
+  HostSetupTests disable OPENAI001 file-wide on purpose (decision 71).
 - Embedding dimension (1536) is defined once in VectorRanker.EmbeddingDimensions.
 - Cached vectors are stamped with `IssueEmbedding.EmbeddingModel`; rows from
   another model are never ranked — sync re-embeds them (from the stored title +
