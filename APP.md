@@ -305,6 +305,20 @@ start if a referenced secret file is missing**. So the shipped
 everything in `.env`, delete the service-level `secrets:` list and the
 top-level `secrets:` block entirely.
 
+## CI/CD
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- **CI** (`ci.yml`) — every pull request and every push to `main` runs
+  `dotnet restore` / `build` / `test` on Ubuntu with .NET 10.
+- **Release** (`release.yml`) — every push to `main` re-runs the tests and,
+  only if they pass, builds the Docker image from the repository `Dockerfile`
+  and pushes it to GitHub Packages as `ghcr.io/<owner>/<repo>` tagged
+  `latest` and `sha-<commit>` (linux/amd64). It authenticates with the
+  workflow's own `GITHUB_TOKEN` — no secrets to configure. The first push
+  creates the ghcr.io package as **private**; flip it to public in the
+  package settings if the image should be pullable without a token.
+
 ## Manual verification
 
 The suite covers the logic; these seven steps cover the parts only a live bot

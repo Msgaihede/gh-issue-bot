@@ -22,6 +22,8 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
   (`owner/repo` must be a configured app; prints the app's auth mode, then
   `SMOKE OK: <url>` or `SMOKE FAILED: …`)
 - Manual (live-bot) checklist: APP.md → "Manual verification".
+- CI: PRs and `main` run build+test; pushes to `main` also release the Docker
+  image to ghcr.io (APP.md → "CI/CD", decisions 69-70).
 
 ## Gotchas
 - Chat model must be `gpt-5.6-luna` — bare `gpt-5.6` routes to a 10x-cost tier.

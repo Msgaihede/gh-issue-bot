@@ -939,3 +939,28 @@ document that contradicts itself.
     Rows written by a build from before this change would carry an empty model
     string, which the heal pass treats as a mismatch and re-embeds — but that
     path only matters to a database that survives, and this one does not.
+
+## 2026-08-19 (CI/CD pipelines)
+
+69. **Release ships from every push to `main`, tagged `latest` + `sha-<commit>`,
+    with no semantic versions.** Chosen by the operator over tag-driven
+    releases: this bot deploys to hosts its operator controls, nobody else pins
+    versions of it, and a merge to `main` already means "this should be
+    running". `docker/metadata-action` supplies the tags (`type=raw,value=latest`
+    plus `type=sha`), so every image stays pullable by the exact commit that
+    built it even though `latest` moves. If the project ever grows outside
+    consumers, adding a `v*` tag trigger with semver tags is additive — nothing
+    about this choice has to be undone.
+
+70. **The Release workflow re-runs the tests itself instead of chaining off
+    CI.** Pushes to `main` therefore run the test job twice, once in each
+    workflow, and that duplication is deliberate. The alternatives are worse:
+    gating on the CI workflow via `workflow_run` runs the released code path
+    from the default branch's workflow file and decouples the gate from the
+    commit being released, and dropping the gate entirely would ship an image
+    from a red `main`. A few duplicated runner-minutes buy a release pipeline
+    that is self-contained — its green checkmark alone proves the image it
+    pushed passed the suite. The publish job builds `linux/amd64` only (that is
+    what the operator runs) and authenticates to ghcr.io with the workflow's
+    `GITHUB_TOKEN` under an explicit `permissions: packages: write`, so the
+    pipeline needs no configured secrets at all.
