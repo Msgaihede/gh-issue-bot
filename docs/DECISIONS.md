@@ -855,4 +855,36 @@ document that contradicts itself.
     Removing the marker leaves the blank lines that surrounded it, which
     markdown collapses back into the one paragraph break it already was —
     not worth a normalization pass that would touch legitimate whitespace in
-    every other report.
+    every other report. The invariant is compose-time-forward only: issues
+    already filed on GitHub with a pasted marker in them keep their truncated
+    semantic body until someone edits the issue, since nothing rewrites
+    history.
+
+66. **A GitHub App private key is parsed at startup, not at the first mint.**
+    Validation used to ask only whether a key was configured and, for
+    `PrivateKeyPath`, whether the file existed — so key *bytes* that
+    `RSA.ImportFromPem` rejects sailed through startup and failed inside the
+    first report, minutes or hours later, as an exception the reporter sees
+    and the operator has to correlate. The overwhelmingly likely way to get
+    there is an inline PEM squeezed into an environment variable, where the
+    `\n` that is a real newline in JSON stays two literal characters after a
+    shell export. `ValidateAuth` now resolves the configured key (inline text,
+    or the file's contents) and imports it into a throwaway `RSA`; any failure
+    becomes `Apps[i].GitHubApp.<field>: not a valid PEM private key.`, naming
+    whichever form was configured and carrying neither the key material nor
+    the exception text, because startup errors get logged. `.env.example` no
+    longer shows an inline PEM at all — it points at `PrivateKeyPath` and
+    reserves `PrivateKey` for key-per-file secrets, where the content really
+    is a multi-line PEM. The one-time file read this costs at startup buys the
+    same "wrong config fails the run" guarantee every other field already had.
+
+67. **`Authorization` is redacted from `IHttpClientFactory`'s own logging.**
+    The factory logs request and response headers at Trace level, which on
+    these clients means a PAT, an App JWT, or a freshly minted installation
+    token in plain text in whatever collects the logs — nobody enables Trace
+    for that, but the day someone enables it to debug a GitHub call is exactly
+    the day it happens. Every GitHub-facing registration (`GitHubService`, the
+    image uploader, and the auth provider's named client, whose response
+    carries the installation token) now calls
+    `RedactLoggedHeaders(["Authorization"])`. It is one call per registration
+    and costs nothing at runtime when the log level is off.

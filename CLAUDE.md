@@ -38,7 +38,9 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 - Each app authenticates with EITHER `GitHubToken` OR a `GitHubApp` block,
   never both — startup fails otherwise. GitHub calls never read the token
   field directly; they ask `IGitHubAuthProvider`, which must stay a singleton
-  or its installation-token cache is worthless.
+  or its installation-token cache is worthless. The App private key is parsed
+  at startup, so an inline PEM in an env var (literal `\n`, not newlines)
+  fails validation — use `PrivateKeyPath` outside key-per-file secrets.
 - The Docker image sets `Database__Path=/data/app.db`; a `.env` (or any env var)
   with a relative path overrides it and puts the db under root-owned `/app`,
   which crash-loops the container. `.env.example` keeps that key commented out.

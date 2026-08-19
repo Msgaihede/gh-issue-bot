@@ -195,8 +195,9 @@ Setting one up:
 5. **Generate a private key** — *General* → *Private keys* → *Generate a
    private key*. GitHub downloads a `.pem` once; it cannot be re-downloaded.
    Supply it as **either** `PrivateKey` (the PEM text itself) **or**
-   `PrivateKeyPath` (a path to the file) — again, exactly one. A path that
-   does not exist fails startup rather than the first report.
+   `PrivateKeyPath` (a path to the file) — again, exactly one. Both are
+   checked at startup: a path that does not exist, and key bytes that RSA
+   cannot import, each fail the run rather than the first report.
 
 With Docker secrets the natural form is `PrivateKey`, because key-per-file
 maps a file's *content* to the config key its *name* spells: a secret file
@@ -206,6 +207,12 @@ somewhere of their own choosing —
 `Apps__0__GitHubApp__PrivateKeyPath=/run/keys/app.pem` — and for local runs
 where the `.pem` sits on disk. Both PKCS#1 (`BEGIN RSA PRIVATE KEY`, what
 GitHub hands out) and PKCS#8 PEM are accepted.
+
+What does *not* work is inlining the PEM into an environment variable. A PEM
+is multi-line; the `\n` in the JSON above is a real newline once JSON is
+parsed, but the same two characters exported from a shell stay two characters
+and the key will not import. Use `PrivateKeyPath` (or a secret file) whenever
+the configuration comes from the environment.
 
 Nothing else changes: the bot mints an installation access token when it
 needs one, caches it for the hour GitHub gives it, and re-mints shortly
@@ -219,7 +226,10 @@ see the smoke test below.
 shell (or use a tool that loads `.env` files) before running — the app
 itself does not read `.env` files; only compose does. `appsettings.json`
 ships with safe, secret-free defaults, so local runs just need the Discord
-token, OpenAI key, and per-app GitHub tokens from elsewhere.
+token, OpenAI key, and per-app GitHub credentials from elsewhere. For an app
+on GitHub App credentials that means `Apps__0__GitHubApp__PrivateKeyPath`
+pointing at the `.pem` on disk — an exported environment variable cannot
+carry the PEM's newlines, and startup rejects the mangled key.
 
 `dotnet build` builds everything, `dotnet test` runs the suite.
 
