@@ -7,9 +7,19 @@ namespace DiscordGithubBot.Pipeline;
 /// Builds the markdown body posted to GitHub for a report: the normalized draft, an optional
 /// regression reference, an optional screenshot gallery, an optional note about screenshots that
 /// failed to upload, and a footer crediting the Discord reporter and the server they reported from.
+/// A hidden <see cref="MetaMarker"/> sits between the draft and everything appended to it.
 /// </summary>
 public static class IssueBodyComposer
 {
+    /// <summary>
+    /// Separates the reporter's own words from everything this bot appends to them. Everything before
+    /// the first occurrence is the report; everything from it on is generated boilerplate. An HTML
+    /// comment is invisible in GitHub's rendered markdown, so the marker costs the reader nothing —
+    /// and <see cref="IssueSyncService"/> uses it to keep the boilerplate out of issue embeddings,
+    /// which would otherwise make every bot-created issue look alike.
+    /// </summary>
+    public const string MetaMarker = "<!-- discord-gh-issue-bot:meta -->";
+
     /// <summary>Composes the body of a new GitHub issue.</summary>
     /// <param name="draftBody">The normalized report text.</param>
     /// <param name="reporterDisplayName">Discord display name shown in the footer.</param>
@@ -41,6 +51,12 @@ public static class IssueBodyComposer
 
         var draft = draftBody.Trim();
         if (draft.Length > 0) AppendBlock(sb, draft);
+
+        // Unconditional, and ahead of every appended block including the regression line: the footer
+        // below is itself unconditional, so "only mark bodies that have boilerplate" would be a branch
+        // that is always taken. A body that is nothing but boilerplate is marked at position zero,
+        // which reads as "no reporter text here" — exactly what it is.
+        AppendBlock(sb, MetaMarker);
 
         if (regressionOfIssueNumber is { } number)
             AppendBlock(sb, $"Possible regression of #{number}.");

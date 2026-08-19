@@ -17,6 +17,45 @@ public class IssueBodyComposerTests
     }
 
     [Fact]
+    public void A_hidden_marker_separates_the_draft_from_everything_appended_to_it()
+    {
+        var body = IssueBodyComposer.ComposeIssueBody(
+            "The body.", "markus", "Acme HQ",
+            [new UploadedImage("a.png", "https://x/a")], ["b.png"], 42);
+
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        Assert.True(marker > 0);
+        Assert.Contains("The body.", body[..marker]);
+
+        // Every appended block is behind the marker — the regression line included, since it is as
+        // generated as the footer is.
+        foreach (var boilerplate in new[]
+                 { "Possible regression of #42.", "### Screenshots", "> [!NOTE]", "_Created by" })
+            Assert.Contains(boilerplate, body[marker..]);
+    }
+
+    [Fact]
+    public void The_marker_is_emitted_even_when_the_body_is_only_the_footer()
+    {
+        // The footer is unconditional, so there is no such thing as a composed body without
+        // boilerplate: the marker is emitted unconditionally rather than behind a branch that is
+        // always taken. An empty draft puts it at position zero, meaning "no reporter text here".
+        var body = IssueBodyComposer.ComposeIssueBody("   ", "markus", "Acme HQ", [], [], null);
+
+        Assert.StartsWith(IssueBodyComposer.MetaMarker, body);
+    }
+
+    [Fact]
+    public void Comment_bodies_are_marked_too()
+    {
+        var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);
+
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        Assert.True(marker > 0);
+        Assert.Contains("_Created by", body[marker..]);
+    }
+
+    [Fact]
     public void Comment_body_carries_the_same_attribution_footer()
     {
         var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);

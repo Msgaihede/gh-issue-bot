@@ -724,3 +724,36 @@ document that contradicts itself.
     build from before this change must delete their SQLite file again (it holds
     only a rebuildable embedding cache and drafts younger than an hour) or the
     first query against `PendingReports` will fail on the missing column.
+
+## 2026-08-19 (embedding noise)
+
+60. **A hidden marker separates the reporter's words from the bot's, and the
+    sync service embeds only the reporter's half.** `IssueBodyComposer` now
+    emits `<!-- discord-gh-issue-bot:meta -->` immediately after the draft
+    body and before every block it appends — the regression line, the
+    screenshot gallery, the upload-failure note, the attribution footer.
+    `IssueSyncService` cuts each fetched body at the first occurrence of that
+    marker and uses the part in front of it for all three derived values: the
+    content hash, the text sent to the embedding model, and the `BodyExcerpt`
+    quoted into the duplicate judge's prompt. The problem is that the
+    boilerplate is *shared*: every issue this bot files ends in the same
+    footer, and most end in the same `### Screenshots` heading, so embedding
+    it gives every bot-created issue a vector component none of them earned —
+    two unrelated reports look similar because they were both filed through
+    Discord. The excerpt has the same disease in prose form, spending the
+    judge's prompt budget on a sentence that is identical across every
+    candidate. The report side was already clean (`ReportPipeline` embeds the
+    AI draft *before* the composer runs), so the sync side was the only place
+    where the query and the corpus disagreed about what an issue's text is.
+    An HTML comment was chosen over a sentinel line because GitHub renders it
+    as nothing at all — the reader of the issue never sees it, and neither
+    does anyone quoting the body elsewhere. Absence of the marker means "not
+    ours": human-authored issues, and every issue this bot filed before this
+    change, are hashed, embedded and excerpted whole exactly as before, so
+    nothing needs re-syncing for correctness. The marker is emitted
+    unconditionally rather than only when boilerplate follows, because the
+    footer is itself unconditional — the condition would always be true.
+    Keeping the hash on the same stripped body is the payoff: a bot issue
+    whose boilerplate changes (a screenshot added, a regression line, a
+    renamed Discord server) no longer looks like changed content and no
+    longer buys a fresh embedding call.

@@ -21,7 +21,8 @@ public interface IIssueSyncService
 /// <summary>
 /// Keeps the cached issue embeddings for a repository in step with GitHub. Sync is incremental
 /// (GitHub's <c>since</c> filter) and re-embeds only issues whose title or body actually changed,
-/// so a routine sync costs one GitHub call and no embedding calls.
+/// so a routine sync costs one GitHub call and no embedding calls. "Body" here means the reporter's
+/// half of it — see <see cref="SemanticBody"/>.
 /// </summary>
 public sealed class IssueSyncService(
     BotDbContext db, IGitHubService gitHub,
@@ -143,7 +144,8 @@ public sealed class IssueSyncService(
     private async Task UpsertAsync(
         string repoKey, GitHubIssue issue, Dictionary<int, IssueEmbedding> rows, CancellationToken ct)
     {
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(issue.Title + "\n" + issue.Body)));
+        var body = SemanticBody(issue.Body);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(issue.Title + "\n" + body)));
 
         if (!rows.TryGetValue(issue.Number, out var row))
         {
@@ -154,11 +156,11 @@ public sealed class IssueSyncService(
             };
             db.IssueEmbeddings.Add(row);
             rows[issue.Number] = row;
-            await EmbedAsync(row, issue, hash, ct);
+            await EmbedAsync(row, issue.Title, body, hash, ct);
         }
         else if (row.ContentHash != hash)
         {
-            await EmbedAsync(row, issue, hash, ct);
+            await EmbedAsync(row, issue.Title, body, hash, ct);
         }
 
         // Metadata is refreshed on every sync even when the content hash is unchanged: an issue can
@@ -168,12 +170,29 @@ public sealed class IssueSyncService(
         row.ClosedAtUtc = issue.ClosedAtUtc;
         row.UpdatedAtUtc = issue.UpdatedAtUtc;
         row.HtmlUrl = issue.HtmlUrl;
-        row.BodyExcerpt = Truncate(issue.Body, BodyExcerptLength);
+        row.BodyExcerpt = Truncate(body, BodyExcerptLength);
     }
 
-    private async Task EmbedAsync(IssueEmbedding row, GitHubIssue issue, string hash, CancellationToken ct)
+    /// <summary>
+    /// The part of an issue body that says what the issue is about. Bodies this bot composed end with
+    /// generated boilerplate — the attribution footer, a screenshot gallery, an upload-failure note, a
+    /// regression reference — which is near-identical across every issue it files: embedded, it is a
+    /// shared vector component that pulls unrelated bot-created issues towards each other, and quoted
+    /// into the judge's prompt it is a thousand characters of noise per candidate. Everything from
+    /// <see cref="IssueBodyComposer.MetaMarker"/> onwards is therefore dropped. A body without the
+    /// marker — every human-authored issue, and every issue filed before the marker existed — is used
+    /// whole, so this only ever narrows what the bot itself wrote.
+    /// </summary>
+    private static string SemanticBody(string body)
     {
-        var text = Truncate(issue.Title + "\n\n" + issue.Body, EmbedTextLength);
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        return marker < 0 ? body : body[..marker].Trim();
+    }
+
+    private async Task EmbedAsync(
+        IssueEmbedding row, string title, string body, string hash, CancellationToken ct)
+    {
+        var text = Truncate(title + "\n\n" + body, EmbedTextLength);
         var vector = await embedder.GenerateVectorAsync(text, cancellationToken: ct);
         row.Vector = vector.ToArray();
 

@@ -45,6 +45,11 @@ issues are also announced publicly in the app's configured channel(s).
 5. **Cosine top-5.** The bot keeps an incrementally synced, embedded copy of
    the target repo's issues (open, plus closed within the last 30 days) and
    ranks them against the new report by cosine similarity, taking the top 5.
+   Issues the bot filed itself are embedded from the reporter's half of the
+   body only: a hidden marker separates it from the generated tail (footer,
+   screenshots, notes), which is cut off before hashing, embedding and
+   excerpting, so two reports never look alike merely for both having come
+   through Discord.
 6. **LLM verdict.** Those candidates, plus the normalized report, go back to
    the chat model for a structured verdict: a specific duplicate, an
    uncertain set of candidates, or no match. A parse failure degrades safely
