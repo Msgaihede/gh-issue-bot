@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using DiscordGithubBot.Configuration;
 using Microsoft.Extensions.Configuration;
 
@@ -103,8 +104,17 @@ public class BotOptionsTests
         Assert.Contains(errors, e => e.Contains("Name"));
     }
 
-    /// <summary>Stand-in PEM: validation only ever asks whether a key was configured, never parses one.</summary>
-    private const string Pem = "-----BEGIN RSA PRIVATE KEY-----not-a-real-key-----END RSA PRIVATE KEY-----";
+    /// <summary>
+    /// A real PEM, generated once per test run: validation parses the key, so a stand-in string would
+    /// now fail every "this configuration is valid" assertion below for the wrong reason.
+    /// </summary>
+    private static readonly string Pem = CreatePem();
+
+    private static string CreatePem()
+    {
+        using var rsa = RSA.Create(2048);
+        return rsa.ExportRSAPrivateKeyPem();
+    }
 
     /// <summary>A GitHub App app: no PAT, a complete <c>GitHubApp</c> block instead.</summary>
     private static BotOptions AppAuth(Action<GitHubAppAuth>? tweak = null)
@@ -200,6 +210,46 @@ public class BotOptionsTests
             var o = AppAuth(a => { a.PrivateKey = ""; a.PrivateKeyPath = $" {path}\n"; });
             Assert.Equal(path, o.Apps[0].GitHubApp!.PrivateKeyPath);
             Assert.Empty(o.Validate());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void A_pkcs8_private_key_validates_as_well_as_pkcs1()
+    {
+        using var rsa = RSA.Create(2048);
+        Assert.Empty(AppAuth(a => a.PrivateKey = rsa.ExportPkcs8PrivateKeyPem()).Validate());
+    }
+
+    public static TheoryData<string> UnparseableKeys() => new()
+    {
+        "not-a-key-at-all",
+        "-----BEGIN RSA PRIVATE KEY-----not-a-real-key-----END RSA PRIVATE KEY-----",
+        // The shell case: `export ...PrivateKey="-----BEGIN...\n..."` yields a two-character \n, not a
+        // newline, and RSA.ImportFromPem rejects it — previously only at the first mint.
+        CreatePem().ReplaceLineEndings("\\n"),
+    };
+
+    [Theory]
+    [MemberData(nameof(UnparseableKeys))]
+    public void An_inline_private_key_that_does_not_parse_is_reported(string key)
+    {
+        var errors = AppAuth(a => a.PrivateKey = key).Validate();
+
+        Assert.Contains(errors, e => e == "Apps[0].GitHubApp.PrivateKey: not a valid PEM private key.");
+        Assert.DoesNotContain(errors, e => e.Contains(key, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_private_key_file_that_does_not_parse_is_reported()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"key-{Guid.NewGuid():N}.pem");
+        File.WriteAllText(path, "not-a-key-at-all");
+        try
+        {
+            Assert.Contains(
+                AppAuth(a => { a.PrivateKey = ""; a.PrivateKeyPath = path; }).Validate(),
+                e => e == "Apps[0].GitHubApp.PrivateKeyPath: not a valid PEM private key.");
         }
         finally { File.Delete(path); }
     }

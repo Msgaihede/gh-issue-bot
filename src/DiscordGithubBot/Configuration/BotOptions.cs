@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace DiscordGithubBot.Configuration;
 
 public sealed class DiscordOptions
@@ -126,6 +128,10 @@ public sealed class BotOptions
     /// pick one silently, and the operator would never learn which — and neither leaves every GitHub call
     /// unauthenticated. A partially filled <c>GitHubApp</c> block is reported field by field, because the
     /// half-configured case is the likely one: an App id copied but the installation id still missing.
+    /// The key is parsed here as well, not merely counted: a PEM mangled on its way through a shell
+    /// (the classic being literal <c>\n</c> two-character sequences instead of newlines) satisfies every
+    /// "is it set" check and then fails at the first mint, an hour into a run and inside a report the
+    /// user is waiting on.
     /// </summary>
     private static IEnumerable<string> ValidateAuth(AppConfig app, string prefix)
     {
@@ -154,6 +160,35 @@ public sealed class BotOptions
         // missing app id does, not the first report an hour into the run.
         else if (hasPath && !File.Exists(auth.PrivateKeyPath))
             yield return $"{prefix}.GitHubApp.PrivateKeyPath: '{auth.PrivateKeyPath}' does not exist.";
+        else if (!KeyParses(auth))
+            // Names whichever key form was actually configured; the phrasing never carries the key
+            // material or the exception text, because startup errors are logged.
+            yield return $"{prefix}.GitHubApp.{(hasPath ? "PrivateKeyPath" : "PrivateKey")}: not a valid PEM private key.";
+    }
+
+    /// <summary>
+    /// Whether the configured private key — inline PEM, or the contents of <c>PrivateKeyPath</c> — is one
+    /// <see cref="RSA"/> can actually import. Called only once the "exactly one form, and the file exists"
+    /// checks above have passed, so a failure here means the bytes themselves are wrong. Every failure is
+    /// the same answer to the caller: nothing about the key, or about why it failed, leaves this method.
+    /// </summary>
+    private static bool KeyParses(GitHubAppAuth auth)
+    {
+        try
+        {
+            var pem = string.IsNullOrWhiteSpace(auth.PrivateKeyPath)
+                ? auth.PrivateKey
+                : File.ReadAllText(auth.PrivateKeyPath);
+
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(pem);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or CryptographicException or NotSupportedException
+                                       or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Apps configured for the given Discord guild.</summary>

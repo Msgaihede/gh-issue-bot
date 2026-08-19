@@ -33,6 +33,15 @@ public static class HostSetup
     /// </summary>
     private static readonly TimeSpan AuthConnectionLifetime = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// Headers whose values <c>IHttpClientFactory</c>'s own logging must replace with <c>*</c>. It logs
+    /// request and response headers at Trace, which on a GitHub client means a PAT — or a freshly minted
+    /// installation token — in plain text in whatever collects the logs. Applied to every GitHub-facing
+    /// client, including the token exchange, whose request carries the App JWT and whose response carries
+    /// the installation token.
+    /// </summary>
+    private static readonly string[] RedactedHeaders = ["Authorization"];
+
     public static IServiceCollection AddBotServices(this IServiceCollection services, BotOptions options)
     {
         services.AddSingleton(options);
@@ -46,14 +55,17 @@ public static class HostSetup
         // *named* client instead, with the documented singleton mitigation: connection recycling moves
         // down to SocketsHttpHandler, and the factory's own handler rotation is switched off.
         services.AddHttpClient(GitHubAuthClientName, ConfigureGitHubClient)
+            .RedactLoggedHeaders(RedactedHeaders)
             .UseSocketsHttpHandler((handler, _) => handler.PooledConnectionLifetime = AuthConnectionLifetime)
             .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
         services.AddSingleton<IGitHubAuthProvider>(sp => new GitHubAuthProvider(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient(GitHubAuthClientName),
             sp.GetRequiredService<ILogger<GitHubAuthProvider>>()));
 
-        services.AddHttpClient<IGitHubService, GitHubService>(ConfigureGitHubClient);
-        services.AddHttpClient<IImageUploader, GitHubImageUploader>(ConfigureGitHubClient);
+        services.AddHttpClient<IGitHubService, GitHubService>(ConfigureGitHubClient)
+            .RedactLoggedHeaders(RedactedHeaders);
+        services.AddHttpClient<IImageUploader, GitHubImageUploader>(ConfigureGitHubClient)
+            .RedactLoggedHeaders(RedactedHeaders);
         services.AddHttpClient<AttachmentDownloader>();
 
         // AI (OpenAIClient construction is lazy and network-free; startup validation guarantees a key,
