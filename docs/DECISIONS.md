@@ -690,3 +690,37 @@ document that contradicts itself.
     issues *and* the list is being used to triage rather than to check "is this
     known", pagination is the right follow-up — the renderer is a pure function
     and the change would be local to it.
+
+## 2026-08-19 (guild attribution)
+
+58. **The GitHub footer names the Discord server as well as the reporter.** The
+    body composer used to end every issue and comment with
+    `_Reported by **<name>** via Discord._`; it now reads
+    `_Created by **<name>** in Discord server **<server>**._`. The old wording
+    was pinned by the plan and by four tests, so those tests were changed
+    deliberately, not repaired: the requirement moved by user directive, and a
+    test that pins a superseded requirement is the thing that is wrong. One
+    footer serves both `ComposeIssueBody` and `ComposeCommentBody` — a comment
+    is the same report reaching the same repository by a different route, and
+    two attribution formats would only invite drift. A blank server name falls
+    back to the old `_Created by **<name>** via Discord._`, so an interaction
+    that somehow carries no guild still credits someone rather than pointing at
+    an empty pair of asterisks. The server name goes through the same `Escape`
+    as the display name (decision 43): a guild owner picks their server name,
+    which makes it attacker-chosen text by the same reasoning that covers
+    display names and file names. The Discord-side announcement still says
+    "Reported by <name> via Discord" — it is posted *in* the server it would be
+    naming, where the server name carries no information.
+
+59. **`GuildName` is stored on the pending report rather than read at
+    confirmation time.** The name is captured in the modal handler
+    (`Context.Guild?.Name`) and travels with the draft through
+    `ReportSubmission` into the `PendingReports` row, so the footer says where
+    the report was actually made even if the guild is renamed during the hour
+    the draft can sit there. It also keeps the confirmation path free of a
+    gateway lookup on data it already owns. Like the `ClaimedAtUtc` column in
+    decision 52, the new column ships **without a migration**: `EnsureCreated()`
+    creates missing tables but never alters an existing one, so anyone running a
+    build from before this change must delete their SQLite file again (it holds
+    only a rebuildable embedding cache and drafts younger than an hour) or the
+    first query against `PendingReports` will fail on the missing column.

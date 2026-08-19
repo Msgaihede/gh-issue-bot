@@ -11,9 +11,13 @@ namespace DiscordGithubBot.Pipeline;
 /// <summary>A Discord attachment already downloaded into memory; CDN URLs expire, bytes do not.</summary>
 public sealed record AttachmentPayload(string FileName, string ContentType, byte[] Bytes);
 
+/// <param name="GuildName">
+/// Name of the Discord server the report came from; credited alongside the reporter in the GitHub
+/// footer. Empty when the interaction carried no guild, which drops the server half of the footer.
+/// </param>
 public sealed record ReportSubmission(
     AppConfig App, ReportType Type, ulong DiscordUserId,
-    string ReporterDisplayName, string RawText,
+    string ReporterDisplayName, string GuildName, string RawText,
     IReadOnlyList<AttachmentPayload> Attachments);
 
 /// <summary>A dedup candidate as shown to the user; serialized into PendingReport.CandidatesJson.</summary>
@@ -110,6 +114,7 @@ public sealed class ReportPipeline(
             RepoKey = submission.App.Repo,
             DiscordUserId = submission.DiscordUserId,
             ReporterDisplayName = submission.ReporterDisplayName,
+            GuildName = submission.GuildName,
             Type = submission.Type,
             OriginalText = submission.RawText,
             DraftTitle = draft.Title,
@@ -141,7 +146,8 @@ public sealed class ReportPipeline(
             var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
 
             var body = IssueBodyComposer.ComposeIssueBody(
-                report.DraftBody, report.ReporterDisplayName, images, failedUploads, regressionOfIssueNumber);
+                report.DraftBody, report.ReporterDisplayName, report.GuildName,
+                images, failedUploads, regressionOfIssueNumber);
             var label = report.Type == ReportType.Bug ? "bug" : "enhancement";
 
             var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, label, ct);
@@ -168,7 +174,7 @@ public sealed class ReportPipeline(
             var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
 
             var body = IssueBodyComposer.ComposeCommentBody(
-                report.DraftBody, report.ReporterDisplayName, images, failedUploads);
+                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads);
 
             var commentUrl = await gitHub.AddCommentAsync(app, issueNumber, body, ct);
             await store.DeleteAsync(pendingReportId, ct);

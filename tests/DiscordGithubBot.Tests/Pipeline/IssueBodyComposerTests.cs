@@ -6,20 +6,41 @@ namespace DiscordGithubBot.Tests.Pipeline;
 public class IssueBodyComposerTests
 {
     [Fact]
-    public void Minimal_body_has_reporter_footer_only()
+    public void Minimal_body_is_the_draft_plus_the_attribution_footer()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("The body.", "markus", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody("The body.", "markus", "Acme HQ", [], [], null);
         Assert.StartsWith("The body.", body);
-        Assert.Contains("_Reported by **markus** via Discord._", body);
+        Assert.Contains("_Created by **markus** in Discord server **Acme HQ**._", body);
         Assert.DoesNotContain("Screenshots", body);
         Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("upload failed", body);
     }
 
     [Fact]
+    public void Comment_body_carries_the_same_attribution_footer()
+    {
+        var body = IssueBodyComposer.ComposeCommentBody("The body.", "markus", "Acme HQ", [], []);
+        Assert.Contains("_Created by **markus** in Discord server **Acme HQ**._", body);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_server_the_bot_cannot_name_leaves_the_reporter_credited_alone(string guildName)
+    {
+        var issue = IssueBodyComposer.ComposeIssueBody("B", "markus", guildName, [], [], null);
+        var comment = IssueBodyComposer.ComposeCommentBody("B", "markus", guildName, [], []);
+
+        Assert.Contains("_Created by **markus** via Discord._", issue);
+        Assert.Contains("_Created by **markus** via Discord._", comment);
+        Assert.DoesNotContain("Discord server", issue);
+        Assert.DoesNotContain("Discord server", comment);
+    }
+
+    [Fact]
     public void Images_render_as_markdown_gallery()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u",
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g",
             [new UploadedImage("a.png", "https://x/a"), new UploadedImage("b.png", "https://x/b")], [], null);
         Assert.Contains("### Screenshots", body);
         Assert.Contains("![a.png](https://x/a)", body);
@@ -29,14 +50,14 @@ public class IssueBodyComposerTests
     [Fact]
     public void Regression_reference_is_included()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", [], [], 42);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], [], 42);
         Assert.Contains("Possible regression of #42.", body);
     }
 
     [Fact]
     public void Failed_uploads_are_noted()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", [], ["x.png", "y.png"], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["x.png", "y.png"], null);
         Assert.Contains("x.png, y.png", body);
         Assert.Contains("upload failed", body, StringComparison.OrdinalIgnoreCase);
     }
@@ -44,7 +65,7 @@ public class IssueBodyComposerTests
     [Fact]
     public void Image_names_cannot_break_out_of_their_markdown_link()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u",
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g",
             [new UploadedImage("shot](http://evil)![x\n<b>`.png", "https://x/a")], [], null);
 
         Assert.Contains(
@@ -55,7 +76,7 @@ public class IssueBodyComposerTests
     [Fact]
     public void Failed_upload_names_cannot_break_out_of_their_note()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", [], ["a](x).png", "b`.png"], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["a](x).png", "b`.png"], null);
 
         Assert.Contains(@"a\]\(x\).png, b\`.png", body);
     }
@@ -63,9 +84,22 @@ public class IssueBodyComposerTests
     [Fact]
     public void The_reporter_name_cannot_break_out_of_the_footer()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "ev[il](http://evil)\nx", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "ev[il](http://evil)\nx", "Acme HQ", [], [], null);
 
-        Assert.Contains(@"_Reported by **ev\[il\]\(http://evil\) x** via Discord._", body);
+        Assert.Contains(
+            @"_Created by **ev\[il\]\(http://evil\) x** in Discord server **Acme HQ**._", body);
+    }
+
+    [Fact]
+    public void The_server_name_cannot_break_out_of_the_footer()
+    {
+        // A server name is no more trustworthy than a display name: whoever owns the guild picks it.
+        var body = IssueBodyComposer.ComposeIssueBody(
+            "B", "u", "Evil](http://evil)![x\\<b>\nrest", [], [], null);
+
+        Assert.Contains(
+            @"_Created by **u** in Discord server **Evil\]\(http://evil\)!\[x\\\<b> rest**._", body);
+        Assert.DoesNotContain("](http://evil)", body); // no link to escape into
     }
 
     [Fact]
@@ -75,19 +109,20 @@ public class IssueBodyComposerTests
         // renders as a single literal backslash and the "<" behind it is armed again — and GitHub renders
         // <a href> as a live link.
         var body = IssueBodyComposer.ComposeIssueBody(
-            "B", """\<a href="https://evil.example">x\</a>""", [], [], null);
+            "B", """\<a href="https://evil.example">x\</a>""", "Acme HQ", [], [], null);
 
         Assert.Contains(
-            """_Reported by **\\\<a href="https://evil.example">x\\\</a>** via Discord._""", body);
+            """_Created by **\\\<a href="https://evil.example">x\\\</a>** in Discord server **Acme HQ**._""",
+            body);
     }
 
     [Fact]
     public void Comment_body_never_has_regression_line()
     {
-        var body = IssueBodyComposer.ComposeCommentBody("B", "u",
+        var body = IssueBodyComposer.ComposeCommentBody("B", "u", "g",
             [new UploadedImage("a.png", "https://x/a")], []);
         Assert.Contains("![a.png](https://x/a)", body);
-        Assert.Contains("_Reported by **u** via Discord._", body);
+        Assert.Contains("_Created by **u** in Discord server **g**._", body);
         Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
     }
 }

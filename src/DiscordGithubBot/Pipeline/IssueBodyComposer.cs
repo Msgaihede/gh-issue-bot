@@ -6,33 +6,34 @@ namespace DiscordGithubBot.Pipeline;
 /// <summary>
 /// Builds the markdown body posted to GitHub for a report: the normalized draft, an optional
 /// regression reference, an optional screenshot gallery, an optional note about screenshots that
-/// failed to upload, and a footer crediting the Discord reporter.
+/// failed to upload, and a footer crediting the Discord reporter and the server they reported from.
 /// </summary>
 public static class IssueBodyComposer
 {
     /// <summary>Composes the body of a new GitHub issue.</summary>
     /// <param name="draftBody">The normalized report text.</param>
     /// <param name="reporterDisplayName">Discord display name shown in the footer.</param>
+    /// <param name="guildName">Discord server the report came from; omitted from the footer when blank.</param>
     /// <param name="images">Screenshots that uploaded successfully; rendered as a gallery.</param>
     /// <param name="failedUploads">File names of screenshots that could not be uploaded.</param>
     /// <param name="regressionOfIssueNumber">Issue this may be a regression of, if any.</param>
     public static string ComposeIssueBody(
-        string draftBody, string reporterDisplayName,
+        string draftBody, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads,
         int? regressionOfIssueNumber) =>
-        Compose(draftBody, reporterDisplayName, images, failedUploads, regressionOfIssueNumber);
+        Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, regressionOfIssueNumber);
 
     /// <summary>
     /// Composes the body of a comment added to an existing issue: identical to
     /// <see cref="ComposeIssueBody"/> minus the regression reference.
     /// </summary>
     public static string ComposeCommentBody(
-        string draftBody, string reporterDisplayName,
+        string draftBody, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
-        Compose(draftBody, reporterDisplayName, images, failedUploads, regressionOfIssueNumber: null);
+        Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, regressionOfIssueNumber: null);
 
     private static string Compose(
-        string draftBody, string reporterDisplayName,
+        string draftBody, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads,
         int? regressionOfIssueNumber)
     {
@@ -57,9 +58,24 @@ public static class IssueBodyComposer
                 "> [!NOTE]\n> Screenshot upload failed for: " +
                 $"{string.Join(", ", failedUploads.Select(Escape))}.");
 
-        AppendBlock(sb, $"---\n_Reported by **{Escape(reporterDisplayName)}** via Discord._");
+        AppendBlock(sb, Footer(reporterDisplayName, guildName));
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The attribution line: who filed the report, and which Discord server they filed it from. A server
+    /// name we could not read leaves the reporter credited on their own rather than pointing at an empty
+    /// server, so the footer always names someone.
+    /// </summary>
+    private static string Footer(string reporterDisplayName, string guildName)
+    {
+        var reporter = Escape(reporterDisplayName);
+        var server = Escape(guildName);
+
+        return server.Length == 0
+            ? $"---\n_Created by **{reporter}** via Discord._"
+            : $"---\n_Created by **{reporter}** in Discord server **{server}**._";
     }
 
     /// <summary>
@@ -71,9 +87,9 @@ public static class IssueBodyComposer
     private static readonly char[] MarkdownSpecials = ['\\', '[', ']', '(', ')', '`', '<'];
 
     /// <summary>
-    /// Escapes text the bot did not author before it is interpolated into markdown. Discord file names and
-    /// display names are attacker-chosen — a screenshot called <c>x](http://evil)![</c> otherwise rewrites
-    /// the image link built around it. The draft body is deliberately left alone: it is the model's own
+    /// Escapes text the bot did not author before it is interpolated into markdown. Discord file names,
+    /// display names and server names are attacker-chosen — a screenshot called <c>x](http://evil)![</c>
+    /// otherwise rewrites the image link built around it. The draft body is deliberately left alone: it is the model's own
     /// markdown and is meant to render. Image URLs are left alone too; they come from our own upload step,
     /// and escaping them would corrupt legitimate links.
     /// </summary>

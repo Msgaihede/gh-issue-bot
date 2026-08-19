@@ -43,6 +43,15 @@ public class PendingReport
     public required string RepoKey { get; set; }
     public ulong DiscordUserId { get; set; }
     public required string ReporterDisplayName { get; set; }
+
+    /// <summary>
+    /// Name of the Discord server the report was filed in, credited in the GitHub footer. Stored with
+    /// the draft rather than read at confirmation time: the click that creates the issue may land after
+    /// a rename, and the footer should say where the report was actually made. Empty when the
+    /// interaction carried no guild.
+    /// </summary>
+    public string GuildName { get; set; } = "";
+
     public ReportType Type { get; set; }
     public required string OriginalText { get; set; }
     public required string DraftTitle { get; set; }

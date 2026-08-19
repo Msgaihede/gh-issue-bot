@@ -64,7 +64,7 @@ issues are also announced publicly in the app's configured channel(s).
    "Not it — show my draft".
 9. **Create or comment.** On create: screenshots upload to GitHub and get
    embedded in the body under a `### Screenshots` heading, the body ends with
-   a `_Reported by **<name>** via Discord._` footer (and a
+   a `_Created by **<name>** in Discord server **<server>**._` footer (and a
    `Possible regression of #N.` line when the report came out of the
    closed-issue flow), the issue gets a `bug`/`enhancement` label, a public
    announcement posts in the app's channel(s), and the reporter gets an
@@ -219,19 +219,19 @@ the guild's **only** configured app.
 2. **New issue path.** The reply is the AI draft preview with **Create
    issue** / **Cancel**. Press *Create issue* and check that: the issue
    exists on GitHub with both screenshots rendering inline in the body, a
-   `bug` label, and a `_Reported by **<you>** via Discord._` footer; a public
-   announcement naming the app, the issue and the reporter appears in the
-   app's configured channel(s), showing both screenshots as a media gallery
-   under the text (on a **private** repository the images are behind
-   authentication, so expect the gallery to come up blank there); and
-   everything you saw in the command
-   channel was ephemeral ("Only you can see this") — the invoker's messages
-   never post publicly.
+   `bug` label, and a `_Created by **<you>** in Discord server
+   **<this server>**._` footer; a public announcement naming the app, the
+   issue and the reporter appears in the app's configured channel(s),
+   showing both screenshots as a media gallery under the text (on a
+   **private** repository the images are behind authentication, so expect
+   the gallery to come up blank there); and everything you saw in the
+   command channel was ephemeral ("Only you can see this") — the invoker's
+   messages never post publicly.
 3. **Duplicate path.** Report the same bug again with different wording. The
    reply should be "This looks like an existing issue: #N …" with **Same
    issue — add my report** / **Not it — show my draft**. Press *Same issue —
    add my report* and confirm the comment (with its own screenshots and
-   reporter footer) lands on issue #N, and that nothing is announced
+   attribution footer) lands on issue #N, and that nothing is announced
    publicly.
 4. **Closed-issue path.** Close issue #N on GitHub, then report the same bug
    a third time. The reply should be "This looks like #N …, closed recently.

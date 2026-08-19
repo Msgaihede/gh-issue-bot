@@ -39,12 +39,12 @@ public class ReportPipelineTests
     private static PendingReport Pending(Guid id) => new()
     {
         Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
-        Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
+        GuildName = "Acme HQ", Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
         CreatedAtUtc = DateTime.UtcNow,
     };
 
     private static ReportSubmission Submission(params AttachmentPayload[] attachments) =>
-        new(App, ReportType.Bug, 42UL, "markus", "it broke", attachments);
+        new(App, ReportType.Bug, 42UL, "markus", "Acme HQ", "it broke", attachments);
 
     private static IssueEmbedding Candidate(int n, string state = "open", DateTime? closedUtc = null) => new()
     {
@@ -133,7 +133,7 @@ public class ReportPipelineTests
         _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
         {
             Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
-            Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
+            GuildName = "Acme HQ", Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
             CreatedAtUtc = DateTime.UtcNow,
             Attachments =
             [
@@ -154,7 +154,8 @@ public class ReportPipelineTests
         Assert.Equal("https://gh/101", result.HtmlUrl);
         await _gitHub.Received(1).CreateIssueAsync(App, "T",
             Arg.Is<string>(b => b.Contains("https://gh/ok") && b.Contains("bad.png")
-                && b.Contains("Possible regression of #7.") && b.Contains("markus")),
+                && b.Contains("Possible regression of #7.")
+                && b.Contains("_Created by **markus** in Discord server **Acme HQ**._")),
             "bug", Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
     }
@@ -223,7 +224,7 @@ public class ReportPipelineTests
         _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(new PendingReport
         {
             Id = id, RepoKey = "owner/repo", DiscordUserId = 42, ReporterDisplayName = "markus",
-            Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
+            GuildName = "Acme HQ", Type = ReportType.Bug, OriginalText = "x", DraftTitle = "T", DraftBody = "B",
             CreatedAtUtc = DateTime.UtcNow,
         });
         _gitHub.AddCommentAsync(App, 7, Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -233,7 +234,9 @@ public class ReportPipelineTests
 
         Assert.Equal("https://gh/7#c1", result.CommentUrl);
         await _gitHub.Received(1).AddCommentAsync(App, 7,
-            Arg.Is<string>(b => b.Contains("markus") && b.Contains("B")), Arg.Any<CancellationToken>());
+            Arg.Is<string>(b => b.Contains("B")
+                && b.Contains("_Created by **markus** in Discord server **Acme HQ**._")),
+            Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
     }
 
@@ -271,6 +274,8 @@ public class ReportPipelineTests
         Assert.Equal(ReportType.Bug, saved.Type);
         Assert.Equal("it broke", saved.OriginalText);
         Assert.Equal(42UL, saved.DiscordUserId);
+        Assert.Equal("markus", saved.ReporterDisplayName);
+        Assert.Equal("Acme HQ", saved.GuildName);
         Assert.Equal("Draft body", saved.DraftBody);
 
         var candidates = JsonSerializer.Deserialize<List<CandidateIssue>>(saved.CandidatesJson);

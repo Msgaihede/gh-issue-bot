@@ -106,9 +106,12 @@ public class ReportInteractionModule(
         ReportOutcome outcome;
         try
         {
+            // The slash command that opens this modal refuses to run outside a server (ResolveApp),
+            // so Guild is set on every path that reaches here; the null-conditional is belt and braces,
+            // and an empty name simply drops the server half of the GitHub footer.
             outcome = await pipeline.ProcessAsync(new ReportSubmission(
                 app, type, Context.User.Id, Context.User.GlobalName ?? Context.User.Username,
-                modal.Description, payloads));
+                Context.Guild?.Name ?? "", modal.Description, payloads));
         }
         catch (NormalizationException ex)
         {
