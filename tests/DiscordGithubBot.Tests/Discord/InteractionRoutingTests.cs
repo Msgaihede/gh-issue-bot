@@ -1,3 +1,4 @@
+using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using DiscordGithubBot.Configuration;
@@ -74,11 +75,50 @@ public class InteractionRoutingTests
     }
 
     [Fact]
+    public async Task Issues_keeps_its_optional_app_option()
+    {
+        var module = await BuildModuleAsync();
+
+        var issues = module.SlashCommands.Single(c => c.Name == "issues");
+        var parameter = Assert.Single(issues.Parameters);
+        Assert.Equal("app", parameter.Name);
+        Assert.False(parameter.IsRequired);
+    }
+
+    [Fact]
     public async Task Registers_the_report_modal()
     {
         var module = await BuildModuleAsync();
 
         var modal = Assert.Single(module.ModalCommands);
         Assert.Equal("report-modal|*|*", modal.Name);
+    }
+
+    /// <summary>
+    /// Builds the exact payload the multi-app path sends — the typed modal plus the app dropdown
+    /// inserted by <c>modifyModal</c> — the same way <c>RespondWithModalAsync</c> does. The null
+    /// interaction is safe: building the modal never touches it.
+    /// </summary>
+    [Fact]
+    public async Task Multi_app_modal_carries_a_required_app_dropdown_on_top()
+    {
+        var module = await BuildModuleAsync();
+        var modalInfo = Assert.Single(module.ModalCommands).Modal;
+
+        var modal = await ((IDiscordInteraction)null!).ToModalAsync(
+            $"report-modal|bug|{ReportModal.PickAppToken}", modalInfo, (ReportModal)null!, null,
+            builder => builder.Components.Insert(0, ReportModal.BuildAppPicker([
+                new AppConfig { Name = "mira", Repo = "acme/mira" },
+                new AppConfig { Name = "nova", Repo = "acme/nova" }])));
+
+        var components = modal.Component.Components.ToList();
+        Assert.Equal(3, components.Count);
+
+        var label = Assert.IsType<LabelComponent>(components[0]);
+        var menu = Assert.IsType<SelectMenuComponent>(label.Component);
+        Assert.Equal(ReportModal.AppSelectId, menu.CustomId);
+        Assert.True(menu.IsRequired);
+        Assert.Equal(1, menu.MinValues);
+        Assert.Equal(["acme/mira", "acme/nova"], menu.Options.Select(o => o.Value));
     }
 }

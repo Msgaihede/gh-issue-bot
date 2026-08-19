@@ -1021,3 +1021,21 @@ document that contradicts itself.
     the raw modal data whenever the custom id's repo segment is the `-`
     placeholder (unambiguous — real repositories always contain a slash).
     `/issues` keeps its `app` option: it opens no modal to ask in.
+
+## 2026-08-19 (app dropdown review round)
+
+74. **Dropdown capacity failures answer with a named problem, not a
+    truncated list.** A Discord select menu holds at most 25 options of at
+    most 100 characters; a guild with more apps, or an app whose name or
+    "owner/repo" is longer (GitHub allows up to 140), would make
+    `BuildAppPicker` throw inside `RespondWithModalAsync` and turn every
+    report in that guild into a generic apology. `PlanModal` now refuses
+    those shapes up front with a "please tell an admin" message instead of
+    silently dropping apps from the dropdown — an explicit failure an
+    operator can act on beats a picker that quietly hides configured apps.
+    Startup validation was considered and rejected: an oversized repo still
+    works fine in a guild where it is the only app. From the same review:
+    the submitted pick (custom id segment or dropdown value — both echo
+    back through the client) now resolves against the guild's own apps
+    rather than every configured one, and an empty pick gets its own reply
+    instead of the misleading "no longer configured".

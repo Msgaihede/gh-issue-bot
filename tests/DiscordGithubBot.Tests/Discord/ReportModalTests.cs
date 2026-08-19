@@ -25,4 +25,14 @@ public class ReportModalTests
         // Repositories are validated to "owner/repo", so a token without a slash is unmistakable.
         Assert.DoesNotContain('/', ReportModal.PickAppToken);
     }
+
+    [Fact]
+    public void Validation_rejects_the_pick_token_as_a_repository()
+    {
+        // Ties the sentinel to the validator that guarantees it: if BotOptions ever starts
+        // accepting slash-less repositories, the placeholder stops being unmistakable.
+        var options = new BotOptions { Apps = [new AppConfig { Name = "mira", Repo = ReportModal.PickAppToken }] };
+
+        Assert.Contains(options.Validate(), e => e.Contains("must be 'owner/repo'"));
+    }
 }

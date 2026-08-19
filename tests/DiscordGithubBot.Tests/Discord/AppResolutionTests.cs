@@ -82,4 +82,46 @@ public class AppResolutionTests
         Assert.Null(choices);
         Assert.Equal("No app is configured for this server.", error);
     }
+
+    [Fact]
+    public void Modal_plan_refuses_more_apps_than_a_dropdown_holds()
+    {
+        var apps = Enumerable.Range(0, 26).Select(i => App($"app{i}")).ToList();
+
+        var (app, choices, error) = AppResolution.PlanModal(apps);
+
+        Assert.Null(app);
+        Assert.Null(choices);
+        Assert.Contains("dropdown", error);
+    }
+
+    [Fact]
+    public void Modal_plan_refuses_an_app_that_cannot_fit_a_dropdown_option()
+    {
+        var oversized = new AppConfig { Name = "mira", Repo = "acme/" + new string('x', 100) };
+
+        var (app, choices, error) = AppResolution.PlanModal([App("nova"), oversized]);
+
+        Assert.Null(app);
+        Assert.Null(choices);
+        Assert.Contains("too long", error);
+    }
+
+    [Fact]
+    public void Picked_repo_is_the_custom_ids_own_segment_for_a_single_app_modal()
+    {
+        Assert.Equal("acme/mira", AppResolution.PickedRepo("acme/mira", null));
+    }
+
+    [Fact]
+    public void Picked_repo_is_the_dropdown_value_when_the_custom_id_carries_the_placeholder()
+    {
+        Assert.Equal("acme/nova", AppResolution.PickedRepo(ReportModal.PickAppToken, "acme/nova"));
+    }
+
+    [Fact]
+    public void Picked_repo_is_empty_when_the_placeholder_arrives_without_a_dropdown_value()
+    {
+        Assert.Equal("", AppResolution.PickedRepo(ReportModal.PickAppToken, null));
+    }
 }

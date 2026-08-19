@@ -86,11 +86,15 @@ public class ReportInteractionModule(
         // The three-second acknowledgement deadline comes before everything else, including the download.
         await DeferAsync(ephemeral: true);
 
-        var app = ResolveModalApp(repoToken);
+        var (app, pickedRepo) = ResolveModalApp(repoToken);
         if (app is null)
         {
-            logger.LogWarning("Modal submitted for unknown repository token {RepoToken}.", repoToken);
-            await FollowupAsync("That app is no longer configured. Please run the command again.", ephemeral: true);
+            logger.LogWarning("Modal submitted for unknown or out-of-guild repository {Repo}.", pickedRepo);
+            await FollowupAsync(
+                pickedRepo.Length == 0
+                    ? "I couldn't tell which app you picked. Please run the command again."
+                    : "That app is no longer configured. Please run the command again.",
+                ephemeral: true);
             return;
         }
 
@@ -269,19 +273,25 @@ public class ReportInteractionModule(
 
     /// <summary>
     /// The app a submitted modal is for: named by the custom id when the guild had one app, read from
-    /// the app dropdown when the reporter picked one inside the modal.
+    /// the app dropdown when the reporter picked one inside the modal. Resolved against the guild's
+    /// own apps, not every configured one — both values echo back through the client, and another
+    /// guild's repository is not a valid pick here.
     /// </summary>
-    private AppConfig? ResolveModalApp(string repoToken)
+    private (AppConfig? App, string Repo) ResolveModalApp(string repoToken)
     {
-        var repo = repoToken;
-        if (repoToken == ReportModal.PickAppToken)
-        {
-            repo = ((IModalInteraction)Context.Interaction).Data.Components
+        var selectValue = repoToken == ReportModal.PickAppToken
+            ? ((IModalInteraction)Context.Interaction).Data.Components
                 .FirstOrDefault(c => c.CustomId == ReportModal.AppSelectId)?
-                .Values?.FirstOrDefault() ?? "";
-        }
+                .Values?.FirstOrDefault()
+            : null;
 
-        return options.AppByRepo(repo);
+        var repo = AppResolution.PickedRepo(repoToken, selectValue);
+        var app = Context.Guild is null
+            ? null
+            : options.AppsForGuild(Context.Guild.Id)
+                .FirstOrDefault(a => string.Equals(a.Repo, repo, StringComparison.OrdinalIgnoreCase));
+
+        return (app, repo);
     }
 
     /// <summary>
