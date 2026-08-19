@@ -84,6 +84,31 @@ public class AttachmentDownloaderTests
         Assert.Equal("shot.png", Assert.Single(skipped));
     }
 
+    /// <summary>
+    /// The composition root caps the client's response buffer so an over-declared body never reaches the
+    /// check above. That cap fails inside <see cref="HttpClient"/>, mid-request — this pins that the
+    /// failure lands in the same catch as any other download error and costs the reporter one file, not
+    /// the whole report.
+    /// </summary>
+    [Fact]
+    public async Task Skips_a_body_that_blows_the_response_buffer_cap()
+    {
+        var overCap = new byte[AttachmentDownloader.MaxBytes + 2];
+        PngSignature.CopyTo(overCap, 0);
+
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "shot.png", HttpStatusCode.OK, overCap);
+
+        var http = fake.CreateClient();
+        http.MaxResponseContentBufferSize = AttachmentDownloader.MaxBytes + 1;
+
+        var (payloads, skipped) = await new AttachmentDownloader(http, NullLogger<AttachmentDownloader>.Instance)
+            .DownloadAsync([Attachment(size: 512)]);
+
+        Assert.Empty(payloads);
+        Assert.Equal("shot.png", Assert.Single(skipped));
+    }
+
     [Fact]
     public async Task Skips_a_download_that_fails()
     {

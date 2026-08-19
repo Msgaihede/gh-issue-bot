@@ -13,7 +13,11 @@ namespace DiscordGithubBot.Discord;
 /// </summary>
 public sealed class AttachmentDownloader(HttpClient http, ILogger<AttachmentDownloader> logger)
 {
-    /// <summary>Largest screenshot accepted; matches what the issue body can reasonably carry.</summary>
+    /// <summary>
+    /// Largest screenshot accepted; matches what the issue body can reasonably carry. The client's response
+    /// buffer is capped just above this at registration, because the check below can only run once the body
+    /// is already in memory and the declared size that gates the request is not ours to trust.
+    /// </summary>
     public const long MaxBytes = 10 * 1024 * 1024;
 
     /// <returns>The downloaded payloads plus the file names that were left out.</returns>

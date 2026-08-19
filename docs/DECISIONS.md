@@ -1060,4 +1060,11 @@ document that contradicts itself.
     The payload now carries the sniffed type, which also fixes a smaller wart —
     parameterised types like `image/png; charset=utf-8` no longer travel to the
     upload endpoint (decision 44's `MediaTypeHeaderValue.Parse` stays as the
-    belt to this braces).
+    belt to this braces). From review: the length check alone was not enough,
+    because `GetByteArrayAsync` buffers the whole body before anything can
+    measure it — with the typed client's default ~2 GB
+    `MaxResponseContentBufferSize`, the only real bound on memory was again the
+    declared size. `HostSetup` now caps that buffer at `MaxBytes + 1`: a body of
+    exactly the limit plus one still reaches the length check, and anything
+    larger fails inside `HttpClient` and lands in the downloader's existing
+    catch as an ordinary skipped file.

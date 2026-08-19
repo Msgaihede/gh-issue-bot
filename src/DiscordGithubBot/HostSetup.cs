@@ -66,7 +66,12 @@ public static class HostSetup
             .RedactLoggedHeaders(RedactedHeaders);
         services.AddHttpClient<IImageUploader, GitHubImageUploader>(ConfigureGitHubClient)
             .RedactLoggedHeaders(RedactedHeaders);
-        services.AddHttpClient<AttachmentDownloader>();
+        // Capped on purpose: the downloader can only measure a body it has already buffered, and the
+        // declared size gating the request comes from the uploading client, which is exactly the metadata
+        // it must not trust. One byte above the limit, so a body of MaxBytes + 1 still reaches the
+        // downloader's own length check and anything larger fails here into its catch as a skipped file.
+        services.AddHttpClient<AttachmentDownloader>(
+            c => c.MaxResponseContentBufferSize = AttachmentDownloader.MaxBytes + 1);
 
         // AI (OpenAIClient construction is lazy and network-free; startup validation guarantees a key,
         // and the DI test passes a dummy key)

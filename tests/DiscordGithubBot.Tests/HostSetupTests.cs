@@ -70,6 +70,23 @@ public class HostSetupTests
     }
 
     /// <summary>
+    /// The declared attachment size is the uploading client talking, so it must not be the only thing
+    /// bounding a download: uncapped, a CDN object far larger than its declared size is materialized whole
+    /// before <see cref="AttachmentDownloader"/> can measure and refuse it. The cap sits one byte above the
+    /// limit so a body of exactly <c>MaxBytes + 1</c> still reaches that check.
+    /// </summary>
+    [Fact]
+    public void The_attachment_client_caps_how_much_it_will_buffer()
+    {
+        using var provider = BuildProvider();
+
+        var client = provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(nameof(AttachmentDownloader));
+
+        Assert.Equal(AttachmentDownloader.MaxBytes + 1, client.MaxResponseContentBufferSize);
+    }
+
+    /// <summary>
     /// Module discovery is handed a scope's provider rather than the root one, because the module itself
     /// cannot be constructed from the root: it takes the scoped <see cref="IReportPipeline"/>. Discord.Net
     /// instantiates a module while building it (that is what <c>OnModuleBuilding</c> is for), so the root
