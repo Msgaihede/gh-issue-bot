@@ -273,7 +273,9 @@ one paragraph. Seeded from the design spec's "Decisions log" section
     attached them in.
 
 28. **The app is chosen with a slash-command option, not a select menu inside
-    the modal.** The design spec sketched an app selector as the modal's first
+    the modal.** *(Superseded by decision 73: the report commands now ask via
+    a dropdown in the modal; only `/issues` still takes the option.)*
+    The design spec sketched an app selector as the modal's first
     row. It is implemented as an optional `app` option on `/report-issue`,
     `/request-feature` and `/issues` instead: the chosen repository then rides
     along in the modal's custom id, which leaves the modal as a single
@@ -1001,3 +1003,21 @@ document that contradicts itself.
     still be repeated. Screenshots always post — they are new information by
     nature. Issue bodies keep the "Created by" footer; only comments switch
     to the also-reported wording.
+
+## 2026-08-19 (app dropdown in the modal)
+
+73. **The app is picked inside the modal, superseding decision 28.**
+    `/report-issue` and `/request-feature` lost their optional `app` option:
+    reporters found it confusing that a parameter existed which they almost
+    never had to fill in. The modal itself now asks instead — a required
+    "App" string-select on top of the form, shown only when the guild maps
+    to several apps; with one app the modal is unchanged and the repository
+    still rides in the custom id. Decision 28 chose the option because
+    modals could not hold select menus at the time; Discord.Net 3.20.1 (the
+    same modal-components wave that gave the form its file upload) can. The
+    dropdown is not declared on `ReportModal`: its options are the guild's
+    configured apps, which an attribute cannot know, so `OpenModalAsync`
+    injects it via `modifyModal` and the submit handler reads the pick from
+    the raw modal data whenever the custom id's repo segment is the `-`
+    placeholder (unambiguous — real repositories always contain a slash).
+    `/issues` keeps its `app` option: it opens no modal to ask in.

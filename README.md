@@ -17,7 +17,8 @@ the matching one that carries only what the new report adds.
 ## Features
 
 - **Slash-command reporting** — `/report-issue` and `/request-feature` open a
-  modal with a description field and up to 10 screenshots.
+  modal with a description field and up to 10 screenshots; guilds with several
+  configured apps pick one from a dropdown in the same modal.
 - **AI normalization** — raw text becomes a structured draft (bug or feature
   template), translated into English if needed. The model never invents facts
   that were not in the report.
@@ -68,12 +69,13 @@ same report twice.
 
 | Command | What it does |
 | --- | --- |
-| `/report-issue [app]` | Bug-report modal → deduplicated issue with the `bug` label |
-| `/request-feature [app]` | Same flow with the feature template and the `enhancement` label |
+| `/report-issue` | Bug-report modal → deduplicated issue with the `bug` label |
+| `/request-feature` | Same flow with the feature template and the `enhancement` label |
 | `/issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
 
-The `app` option is only needed when a guild maps to more than one configured
-app.
+When a guild maps to more than one configured app, the report modal asks which
+app via a dropdown; `/issues` instead takes an optional `app` option, only
+needed in that case.
 
 ## Getting started
 

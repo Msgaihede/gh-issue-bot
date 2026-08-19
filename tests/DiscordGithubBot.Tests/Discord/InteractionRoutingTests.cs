@@ -46,6 +46,18 @@ public class InteractionRoutingTests
     }
 
     [Fact]
+    public async Task Report_commands_take_no_options()
+    {
+        var module = await BuildModuleAsync();
+
+        var reportCommands = module.SlashCommands
+            .Where(c => c.Name is "report-issue" or "request-feature").ToList();
+
+        Assert.Equal(2, reportCommands.Count);
+        Assert.All(reportCommands, c => Assert.Empty(c.Parameters));
+    }
+
+    [Fact]
     public async Task Routes_every_custom_id_action_to_a_handler()
     {
         var module = await BuildModuleAsync();

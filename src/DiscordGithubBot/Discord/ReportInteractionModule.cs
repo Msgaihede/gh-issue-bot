@@ -38,6 +38,7 @@ public class ReportInteractionModule(
         "That report is no longer waiting — it expired, or another click is already handling it. " +
         "Please run the command again.";
     private const string CancelledMessage = "Cancelled — nothing was created.";
+    private const string GuildOnlyMessage = "This command only works inside a server.";
     private const string GenericErrorMessage =
         "Something went wrong while processing your report. Please try again later.";
     private const string NormalizationErrorMessage =
@@ -48,12 +49,10 @@ public class ReportInteractionModule(
     // --- slash commands ---
 
     [SlashCommand("report-issue", "Report a bug in the app", runMode: RunMode.Sync)]
-    public Task ReportIssue([Summary(description: AppOptionDescription)] string? app = null) =>
-        OpenModalAsync(ReportType.Bug, app);
+    public Task ReportIssue() => OpenModalAsync(ReportType.Bug);
 
     [SlashCommand("request-feature", "Request a new feature", runMode: RunMode.Sync)]
-    public Task RequestFeature([Summary(description: AppOptionDescription)] string? app = null) =>
-        OpenModalAsync(ReportType.Feature, app);
+    public Task RequestFeature() => OpenModalAsync(ReportType.Feature);
 
     [SlashCommand("issues", "List open GitHub issues", runMode: RunMode.Sync)]
     public async Task Issues([Summary(description: AppOptionDescription)] string? app = null)
@@ -82,15 +81,15 @@ public class ReportInteractionModule(
     // --- modal submit ---
 
     [ModalInteraction("report-modal|*|*", runMode: RunMode.Sync)]
-    public async Task OnReportModal(string typeToken, string repo, ReportModal modal)
+    public async Task OnReportModal(string typeToken, string repoToken, ReportModal modal)
     {
         // The three-second acknowledgement deadline comes before everything else, including the download.
         await DeferAsync(ephemeral: true);
 
-        var app = options.AppByRepo(repo);
+        var app = ResolveModalApp(repoToken);
         if (app is null)
         {
-            logger.LogWarning("Modal submitted for unknown repository {Repo}.", repo);
+            logger.LogWarning("Modal submitted for unknown repository token {RepoToken}.", repoToken);
             await FollowupAsync("That app is no longer configured. Please run the command again.", ephemeral: true);
             return;
         }
@@ -115,13 +114,13 @@ public class ReportInteractionModule(
         }
         catch (NormalizationException ex)
         {
-            logger.LogWarning(ex, "Normalization failed for a report in {Repo}.", repo);
+            logger.LogWarning(ex, "Normalization failed for a report in {Repo}.", app.Repo);
             await FollowupAsync(NormalizationErrorMessage, ephemeral: true);
             return;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Report pipeline failed for {Repo}.", repo);
+            logger.LogError(ex, "Report pipeline failed for {Repo}.", app.Repo);
             await FollowupAsync(GenericErrorMessage, ephemeral: true);
             return;
         }
@@ -135,7 +134,7 @@ public class ReportInteractionModule(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Could not deliver the report outcome for {Repo}.", repo);
+            logger.LogError(ex, "Could not deliver the report outcome for {Repo}.", app.Repo);
 
             try
             {
@@ -143,7 +142,7 @@ public class ReportInteractionModule(
             }
             catch (Exception fallbackEx)
             {
-                logger.LogWarning(fallbackEx, "Could not deliver the fallback reply for {Repo} either.", repo);
+                logger.LogWarning(fallbackEx, "Could not deliver the fallback reply for {Repo} either.", app.Repo);
             }
         }
     }
@@ -233,24 +232,57 @@ public class ReportInteractionModule(
 
     // --- shared flow ---
 
-    private async Task OpenModalAsync(ReportType type, string? appName)
+    private async Task OpenModalAsync(ReportType type)
     {
-        var (app, error) = ResolveApp(appName);
+        if (Context.Guild is null)
+        {
+            await RespondAsync(GuildOnlyMessage, ephemeral: true);
+            return;
+        }
+
+        var (app, choices, error) = AppResolution.PlanModal(options.AppsForGuild(Context.Guild.Id));
         if (error is not null)
         {
             await RespondAsync(error, ephemeral: true);
             return;
         }
 
-        // The chosen repository rides along in the modal's custom id, so the submit handler needs no state.
+        // The chosen repository rides along in the modal's custom id, so the submit handler needs no
+        // state. With several apps the choice hasn't been made yet: a placeholder token rides instead,
+        // and a dropdown of the guild's apps goes on top of the form.
         var typeToken = type == ReportType.Bug ? "bug" : "feature";
-        await RespondWithModalAsync<ReportModal>($"report-modal|{typeToken}|{app!.Repo}");
+        if (app is not null)
+        {
+            await RespondWithModalAsync<ReportModal>($"report-modal|{typeToken}|{app.Repo}");
+            return;
+        }
+
+        await RespondWithModalAsync<ReportModal>(
+            $"report-modal|{typeToken}|{ReportModal.PickAppToken}",
+            modifyModal: modal => modal.Components.Insert(0, ReportModal.BuildAppPicker(choices!)));
     }
 
     private (AppConfig? App, string? Error) ResolveApp(string? appName) =>
         Context.Guild is null
-            ? (null, "This command only works inside a server.")
+            ? (null, GuildOnlyMessage)
             : AppResolution.Resolve(options.AppsForGuild(Context.Guild.Id), appName);
+
+    /// <summary>
+    /// The app a submitted modal is for: named by the custom id when the guild had one app, read from
+    /// the app dropdown when the reporter picked one inside the modal.
+    /// </summary>
+    private AppConfig? ResolveModalApp(string repoToken)
+    {
+        var repo = repoToken;
+        if (repoToken == ReportModal.PickAppToken)
+        {
+            repo = ((IModalInteraction)Context.Interaction).Data.Components
+                .FirstOrDefault(c => c.CustomId == ReportModal.AppSelectId)?
+                .Values?.FirstOrDefault() ?? "";
+        }
+
+        return options.AppByRepo(repo);
+    }
 
     /// <summary>
     /// Acknowledges the click, re-reads the custom id and runs the action, turning the two expected

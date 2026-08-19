@@ -52,4 +52,34 @@ public class AppResolutionTests
         Assert.Null(app);
         Assert.Equal("No app is configured for this server.", error);
     }
+
+    [Fact]
+    public void Modal_plan_uses_the_only_app_without_a_dropdown()
+    {
+        var (app, choices, error) = AppResolution.PlanModal([App("mira")]);
+
+        Assert.Null(error);
+        Assert.Null(choices);
+        Assert.Equal("mira", app!.Name);
+    }
+
+    [Fact]
+    public void Modal_plan_offers_a_dropdown_when_several_apps_are_configured()
+    {
+        var (app, choices, error) = AppResolution.PlanModal([App("mira"), App("nova")]);
+
+        Assert.Null(error);
+        Assert.Null(app);
+        Assert.Equal(["mira", "nova"], choices!.Select(a => a.Name));
+    }
+
+    [Fact]
+    public void Modal_plan_reports_a_server_with_no_configured_app()
+    {
+        var (app, choices, error) = AppResolution.PlanModal([]);
+
+        Assert.Null(app);
+        Assert.Null(choices);
+        Assert.Equal("No app is configured for this server.", error);
+    }
 }

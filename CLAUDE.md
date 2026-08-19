@@ -36,6 +36,10 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 - Never hotlink Discord CDN URLs in GitHub issue bodies.
 - float[] embeddings map to BLOB via a ValueConverter + ValueComparer (both required).
 - All interaction replies are ephemeral; only issue creations post publicly.
+- The report modal's "App" dropdown is not declared on ReportModal — its
+  options are per-guild, so OpenModalAsync injects it via `modifyModal`, and
+  the submit handler reads the pick from the raw modal data when the custom
+  id's repo segment is the `-` placeholder (decision 73).
 - Components V2 messages carry all their text inside the payload — never pass
   `text:` together with `components:`, Discord rejects the combination.
 - Interaction handlers are `RunMode.Sync` on purpose: BotService owns the

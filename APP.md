@@ -21,10 +21,10 @@ issues are also announced publicly in the app's configured channel(s).
 
 ## The report workflow
 
-1. **Modal.** The reporter runs `/report-issue` or `/request-feature`,
-   naming the app with the optional `app` option when the guild maps to more
-   than one. A modal opens with a multiline description field and an
-   optional file upload for up to 10 screenshots.
+1. **Modal.** The reporter runs `/report-issue` or `/request-feature` — no
+   options either way. A modal opens with a multiline description field and
+   an optional file upload for up to 10 screenshots; when the guild maps to
+   more than one app, a required "App" dropdown sits on top of the form.
 2. **Defer, then immediate download.** On submit, the bot acknowledges the
    interaction ephemerally (Discord allows three seconds) and downloads any
    attached image bytes right away — Discord's CDN URLs expire in about 24
@@ -99,18 +99,20 @@ gives the claim back, so the draft and its buttons still work for a retry.
 
 ## Slash commands
 
-- **`/report-issue [app]`** — opens the bug-report modal described above.
-- **`/request-feature [app]`** — same flow, using the feature-request
+- **`/report-issue`** — opens the bug-report modal described above.
+- **`/request-feature`** — same flow, using the feature-request
   template and the `enhancement` label instead of `bug`.
 - **`/issues [app]`** — an ephemeral list of the target repo's open issue
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
 
-The `app` option is only needed when the guild maps to more than one
-configured app; with a single app it can be left out, and naming an unknown
-one answers with the valid names. A name that is given is always honoured —
-it must match a configured app of that guild, even when the guild has only
-one.
+The report commands take no options: with a single configured app the modal
+opens straight away, with several the modal itself asks which app via a
+dropdown. Only `/issues` still has an `app` option (it opens no modal to ask
+in) — needed only when the guild maps to more than one app, and naming an
+unknown one answers with the valid names. A name that is given is always
+honoured — it must match a configured app of that guild, even when the guild
+has only one.
 
 ## Configuration
 
@@ -334,10 +336,12 @@ GitHub credentials for a test repository, in a guild where that repository is
 the guild's **only** configured app. Steps 1–6 are written for a PAT; step 7
 repeats what is worth repeating under a GitHub App.
 
-1. **Modal.** Run `/report-issue` in the guild. The `app` option can be left
-   empty (one app is configured), and the modal opens immediately — no app
-   picker, no extra step. Fill in the description, attach two screenshots,
-   submit.
+1. **Modal.** Run `/report-issue` in the guild. The modal opens immediately —
+   with one configured app there is no "App" dropdown, no extra step. Fill in
+   the description, attach two screenshots, submit. (If a second app is
+   configured for a test guild, also check the other shape once: the modal
+   opens with a required "App" dropdown on top, and the submitted report
+   lands in the picked app's repository.)
 2. **New issue path.** The reply is the AI draft preview with **Create
    issue** / **Cancel**. Press *Create issue* and check that: the issue
    exists on GitHub with both screenshots rendering inline in the body, a
