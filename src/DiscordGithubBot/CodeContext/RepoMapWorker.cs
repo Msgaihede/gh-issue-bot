@@ -7,33 +7,34 @@ using Microsoft.Extensions.Logging;
 namespace DiscordGithubBot.CodeContext;
 
 /// <summary>
-/// Keeps every app's repository map in step with its default branch. A pass checks each branch head (two
-/// GitHub calls when nothing changed) and summarizes what moved; it runs hourly, and every few minutes
-/// while some map is still catching up — a first build is capped per pass, so a large repository takes a
-/// few passes. Each app gets its own DI scope, so its database context and usage meter are its own, and a
-/// failure is a warning rather than a crash.
+/// Keeps every app's repository map in step with its default branch: once at startup, then every
+/// <see cref="Interval"/>. Each check asks GitHub for the branch head (two calls when nothing changed) and
+/// summarizes every file added or changed since the last check — by blob SHA, so an edit is never missed —
+/// running until the map is complete, which makes the startup check the full first build. Each app gets its
+/// own DI scope, so its database context and usage meter are its own, and a failure is a warning rather
+/// than a crash: the next check retries it.
 /// </summary>
 public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions options, ILogger<RepoMapWorker> logger)
     : BackgroundService
 {
-    /// <summary>Lets the gateway connect and the first reports through before the map starts spending.</summary>
-    private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(30);
-
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
-    private static readonly TimeSpan CatchUpInterval = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// How long after one check ends the next begins. Short because a check that finds nothing changed costs
+    /// two GitHub calls and no model calls, and every minute of lag is a minute in which new reports are
+    /// matched against the previous version of the files that changed.
+    /// </summary>
+    internal static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
-            await Task.Delay(StartupDelay, stoppingToken);
+            // Yield first, so a long first build can never hold up the start of the other hosted services.
+            await Task.Yield();
 
             while (true)
             {
-                var catchingUp = false;
-                foreach (var app in options.Apps) catchingUp |= !await RefreshAsync(app, stoppingToken);
-
-                await Task.Delay(catchingUp ? CatchUpInterval : Interval, stoppingToken);
+                foreach (var app in options.Apps) await UpdateAsync(app, stoppingToken);
+                await Task.Delay(Interval, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -42,23 +43,21 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
         }
     }
 
-    /// <returns>whether the app's map is complete.</returns>
-    private async Task<bool> RefreshAsync(AppConfig app, CancellationToken ct)
+    private async Task UpdateAsync(AppConfig app, CancellationToken ct)
     {
         try
         {
             await using var scope = scopes.CreateAsyncScope();
-            var result = await scope.ServiceProvider.GetRequiredService<IRepoMapService>().RefreshAsync(app, ct);
+            var result = await scope.ServiceProvider.GetRequiredService<IRepoMapService>().UpdateAsync(app, ct);
 
-            if (result.Summarized > 0 || result.Removed > 0)
+            if (result.Summarized > 0 || result.Removed > 0 || !result.Complete)
             {
                 var usage = scope.ServiceProvider.GetRequiredService<AiUsageMeter>();
                 logger.LogInformation(
                     "Repository map of {Repo}: {Summarized} file(s) summarized, {Removed} removed, {State}; AI usage {Usage}.",
-                    app.Repo, result.Summarized, result.Removed, result.Complete ? "complete" : "catching up", usage);
+                    app.Repo, result.Summarized, result.Removed,
+                    result.Complete ? "up to date" : "incomplete, retrying at the next check", usage);
             }
-
-            return result.Complete;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -66,8 +65,7 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The repository map pass for {Repo} failed.", app.Repo);
-            return false;
+            logger.LogWarning(ex, "The repository map update for {Repo} failed; retrying at the next check.", app.Repo);
         }
     }
 }

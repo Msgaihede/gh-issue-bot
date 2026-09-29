@@ -136,14 +136,15 @@ prints the decisions, the cost, and each decision's raw probabilities.
 ### Repository map + code context
 - **Map:** per app, a SQLite table of source files and Markdown docs
   (`path`, blob SHA, ≤25-word summary of what the file does or the doc
-  explains). A background worker checks the default branch's head hourly; on
-  a new commit it lists the tree, filters (code-extension allowlist plus
+  explains). A background worker checks the default branch's head at
+  startup and then every 10 minutes; on a new commit it lists the tree, filters (code-extension allowlist plus
   `.md`/`.mdx`/`.markdown`/`.rst`/`.adoc`; vendor/build/`.github` directories,
   generated code, licences and codes of conduct out; ≤200 KB; cap 2000
   files), and summarizes only new or changed blobs (batched, flex). The map
-  is marked complete only once every file is summarized; each pass
-  summarizes at most 400 files and the worker returns every 5 minutes while
-  a map is incomplete. A file the model refuses or skips is stored
+  is marked complete only once every file is summarized; a check runs passes
+  of at most 400 files (each one saved) back to back until it is, so the
+  startup check is the full first build, and stops early only when a pass
+  makes no progress. A file the model refuses or skips is stored
   unsummarized so no pass pays for it twice.
 - **Selection:** two Jev `choice` rounds over the map (chunks of ≤150 files,
   same shortlist helper as dedup) — one over code, one over docs — keeping

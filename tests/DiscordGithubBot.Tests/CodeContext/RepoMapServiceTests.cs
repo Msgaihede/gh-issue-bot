@@ -223,6 +223,65 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.Equal(10, second.Summarized);
     }
 
+    /// <summary>The startup check is the whole first build: passes run back to back until the map is complete.</summary>
+    [Fact]
+    public async Task An_update_runs_passes_until_the_map_is_complete()
+    {
+        var files = Enumerable.Range(0, RepoMapService.MaxSummariesPerRefresh * 2 + 10)
+            .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
+        Head("c1", files);
+
+        var result = await new RepoMapService(_db, _gitHub, new EchoChat([]), NullLogger<RepoMapService>.Instance)
+            .UpdateAsync(App);
+
+        Assert.True(result.Complete);
+        Assert.Equal(files.Length, result.Summarized);
+        Assert.Equal(files.Length, Rows().Count);
+    }
+
+    /// <summary>Only files added or changed since the last check are summarized again.</summary>
+    [Fact]
+    public async Task A_later_update_summarizes_only_what_was_added_or_changed()
+    {
+        var seen = new List<ChatPrompt>();
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance);
+        Head("c1", File("src/a.cs", "a1"), File("src/b.cs", "b1"));
+        await sut.UpdateAsync(App);
+
+        Head("c2", File("src/a.cs", "a1"), File("src/b.cs", "b2"), File("src/new.cs", "n1"));
+        var result = await sut.UpdateAsync(App);
+
+        Assert.True(result.Complete);
+        Assert.Equal(2, result.Summarized);
+        Assert.DoesNotContain("=== src/a.cs", seen[^1].User);
+    }
+
+    [Fact]
+    public async Task An_update_stops_when_a_pass_makes_no_progress()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var chat = new FakeChat(new OpenRouterException("queue", null, isTransient: true));
+
+        var result = await Sut(chat).UpdateAsync(App);
+
+        Assert.False(result.Complete);
+        Assert.Single(chat.Calls); // one failed pass, not MaxPassesPerUpdate of them
+    }
+
+    [Fact]
+    public async Task An_update_with_nothing_changed_is_up_to_date()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), NullLogger<RepoMapService>.Instance);
+        await sut.UpdateAsync(App);
+
+        var result = await sut.UpdateAsync(App);
+
+        Assert.True(result.UpToDate);
+        Assert.True(result.Complete);
+        Assert.Equal(0, result.Summarized);
+    }
+
     [Fact]
     public async Task Summaries_are_batched()
     {

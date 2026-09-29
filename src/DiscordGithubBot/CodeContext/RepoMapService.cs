@@ -10,14 +10,25 @@ namespace DiscordGithubBot.CodeContext;
 
 /// <param name="UpToDate">the map already described the branch head; nothing was fetched</param>
 /// <param name="Complete">every source file at the head is summarized</param>
-/// <param name="Summarized">files summarized (or marked unreadable) by this pass</param>
+/// <param name="Summarized">files summarized (or marked unreadable)</param>
 /// <param name="Removed">files dropped because they left the branch or the filter</param>
 public sealed record RepoMapRefresh(bool UpToDate, bool Complete, int Summarized, int Removed);
 
 public interface IRepoMapService
 {
-    /// <summary>Moves the app's map towards its default branch's head. Never throws on a GitHub or model failure — logs and reports the map incomplete.</summary>
+    /// <summary>
+    /// One pass: moves the app's map towards its default branch's head, summarizing at most
+    /// <see cref="RepoMapService.MaxSummariesPerRefresh"/> added or changed files. Never throws on a GitHub or
+    /// model failure — logs and reports the map incomplete.
+    /// </summary>
     Task<RepoMapRefresh> RefreshAsync(AppConfig app, CancellationToken ct = default);
+
+    /// <summary>
+    /// Brings the map fully up to date: passes run back to back until it describes the branch head, or until a
+    /// pass makes no progress (a failure it has logged; the next update retries). Never throws on a GitHub or
+    /// model failure.
+    /// </summary>
+    Task<RepoMapRefresh> UpdateAsync(AppConfig app, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -29,8 +40,8 @@ public interface IRepoMapService
 /// <remarks>
 /// Refreshes are incremental on git's own identity: a file is summarized again only when its blob SHA
 /// changes, so after the first build a push that touches three files costs three summaries. A pass
-/// summarizes at most <see cref="MaxSummariesPerRefresh"/> files, which spreads a first build of a large
-/// repository over several passes (the worker comes back sooner while a map is incomplete). A file the
+/// summarizes at most <see cref="MaxSummariesPerRefresh"/> files and saves; <see cref="UpdateAsync"/> runs
+/// passes back to back, so a first build completes in one update while each pass stays a checkpoint. A file the
 /// model cannot or will not summarize is stored with an empty summary — it drops out of selection until
 /// it changes — so no pass can loop on paying for the same failure. A transient failure, and any request
 /// OpenRouter refuses outright (a bad key, exhausted credits, an unknown model), simply ends the pass and
@@ -44,6 +55,9 @@ public sealed class RepoMapService(
     internal const int MaxFiles = 2000;
 
     internal const int MaxSummariesPerRefresh = 400;
+
+    /// <summary>Enough passes for a full <see cref="MaxFiles"/> build, plus one for the pass that confirms it.</summary>
+    internal const int MaxPassesPerUpdate = MaxFiles / MaxSummariesPerRefresh + 1;
 
     /// <summary>The head of a file says what it is; more would buy little and cost per token.</summary>
     internal const int MaxCharsPerFile = 8000;
@@ -71,6 +85,24 @@ public sealed class RepoMapService(
     private sealed record SummaryDto(string Path, string Summary);
 
     private sealed record SummariesDto(List<SummaryDto> Files);
+
+    public async Task<RepoMapRefresh> UpdateAsync(AppConfig app, CancellationToken ct = default)
+    {
+        var total = new RepoMapRefresh(UpToDate: true, Complete: false, 0, 0);
+
+        for (var pass = 0; pass < MaxPassesPerUpdate; pass++)
+        {
+            var result = await RefreshAsync(app, ct);
+            total = new RepoMapRefresh(
+                total.UpToDate && result.UpToDate, result.Complete,
+                total.Summarized + result.Summarized, total.Removed + result.Removed);
+
+            // No progress means a failure the pass already logged; going again now would repeat it.
+            if (result.Complete || result.Summarized == 0) break;
+        }
+
+        return total;
+    }
 
     public async Task<RepoMapRefresh> RefreshAsync(AppConfig app, CancellationToken ct = default)
     {

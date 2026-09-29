@@ -118,12 +118,17 @@ starts from the right place:
   written by GPT-6 Luna on the flex tier. Dependencies, build output,
   generated or minified code, assets, lock files, `.github/`, licences and
   codes of conduct are left out, as is anything over 200 KB; a repository with
-  more than 2000 such files keeps the shallowest 2000. The worker checks each
-  branch head hourly (two GitHub calls when nothing changed) and summarizes
-  only files whose git blob changed. A first build is capped at 400 files per
-  pass and resumes every five minutes until the map is complete. A request
-  OpenRouter refuses outright (credits exhausted, bad key) just ends the pass;
-  the map picks up where it stopped once the key works again.
+  more than 2000 such files keeps the shallowest 2000. The worker checks
+  every app **at startup and then every 10 minutes**: it asks GitHub for the
+  default branch's head (two calls when nothing changed) and summarizes every
+  file added or changed since the last check — compared by git blob SHA, so an
+  edit is never missed — and drops deleted ones. A check runs until the map is
+  complete, so the startup check is the whole first build (saved every 400
+  files; a mid-sized repository takes a few minutes on flex). A request
+  OpenRouter refuses outright (credits exhausted, bad key) ends the check
+  without losing anything; the next check picks up where it stopped. Reports
+  filed within 10 minutes of a push can still see the previous version of the
+  files it changed.
 - **At "Create issue".** Jev picks up to four code files and, separately, up
   to two docs from the map; the bot reads them at the exact version the map
   summarized; GPT-6 Luna says which are really involved and how, naming

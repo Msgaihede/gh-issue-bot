@@ -95,15 +95,15 @@ if (args is ["--dry-run", var dryRepo, var reportText])
     if (app is null) { Console.Error.WriteLine($"No configured app for repo '{dryRepo}'."); return 1; }
     Console.WriteLine($"Dry run for {app.Repo}: no report is stored and nothing is posted to Discord or GitHub.");
 
-    // Code context needs a map; building one is incremental, so after the first run this is two GitHub calls.
+    // Code context needs a map; updating one is incremental, so after the first run this is two GitHub calls.
     // Its own scope, so its usage is reported apart from the report's.
     await using (var mapScope = host.Services.CreateAsyncScope())
     {
-        var map = await mapScope.ServiceProvider.GetRequiredService<IRepoMapService>().RefreshAsync(app);
+        var map = await mapScope.ServiceProvider.GetRequiredService<IRepoMapService>().UpdateAsync(app);
         Console.WriteLine(map.UpToDate
             ? "Repository map: up to date."
             : $"Repository map: {map.Summarized} file(s) summarized ({mapScope.ServiceProvider.GetRequiredService<AiUsageMeter>()}); " +
-              (map.Complete ? "complete." : "still incomplete, so code context may be thin."));
+              (map.Complete ? "complete." : "incomplete after a failure (see the warning above), so code context may be thin."));
     }
 
     await using var scope = host.Services.CreateAsyncScope();
