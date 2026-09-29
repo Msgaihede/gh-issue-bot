@@ -118,15 +118,21 @@ the bot exits before connecting to anything.
 
 ### Run
 
+Copy `.env.example` to `.env`, fill it in, then:
+
 ```sh
-dotnet run --project src/DiscordGithubBot
+./run.ps1
 ```
+
+(`run.ps1` loads `.env` — the app itself does not read it — and passes its
+arguments through; `dotnet run --project src/DiscordGithubBot` works when the
+settings are already in your environment.)
 
 To see what the models decide about a report without touching Discord or
 GitHub issues — the way to tune the decision thresholds:
 
 ```sh
-dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "The save button does nothing after I rotate the phone"
+./run.ps1 --dry-run owner/repo "The save button does nothing after I rotate the phone"
 ```
 
 ### Run with Docker

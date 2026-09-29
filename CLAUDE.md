@@ -19,7 +19,8 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
 ## Commands
 - Build: `dotnet build`
 - Test: `dotnet test`
-- Run: `dotnet run --project src/DiscordGithubBot`
+- Run: `./run.ps1` (loads the gitignored `.env`, which the app itself never
+  reads) or `dotnet run --project src/DiscordGithubBot` with settings in the environment
 - Dry run (one report through every model call, nothing stored or posted):
   `dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "report text"`
 - Image-upload smoke test: `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`

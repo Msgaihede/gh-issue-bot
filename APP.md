@@ -388,10 +388,15 @@ see the smoke test below.
 
 ## Running locally
 
-`dotnet run --project src/DiscordGithubBot` runs it directly. Copy
-`.env.example` to `.env`, fill in real values, and export them into your
-shell (or use a tool that loads `.env` files) before running — the app
-itself does not read `.env` files; only compose does. `appsettings.json`
+Copy `.env.example` to `.env`, fill in real values, and start the bot with
+`./run.ps1` (PowerShell) — it takes the same arguments as the app, so
+`./run.ps1 --dry-run owner/repo "text"` works too. The app itself does not read
+`.env` files (only compose does); `run.ps1` loads `.env` into its own process
+environment, skipping empty values so an unfilled line never overrides a
+setting made elsewhere, picks up bot settings saved as Windows user variables
+after the terminal was opened, and points the content root at the project so
+`appsettings.json` is actually loaded. `dotnet run --project src/DiscordGithubBot`
+still works when the settings are already in the environment. `appsettings.json`
 ships with safe, secret-free defaults, so local runs just need the Discord
 token, the OpenRouter key, and per-app GitHub credentials from elsewhere. For
 an app on GitHub App credentials that means `Apps__0__GitHubApp__PrivateKeyPath`
