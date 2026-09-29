@@ -56,8 +56,11 @@ public sealed class RepoMapServiceTests : IDisposable
 
         public Task<T> CompleteAsync<T>(ChatPrompt prompt, ChatUrgency urgency, CancellationToken ct = default) where T : class
         {
-            seen.Add(prompt);
-            Urgencies.Add(urgency);
+            lock (seen)
+            {
+                seen.Add(prompt);
+                Urgencies.Add(urgency);
+            }
             var paths = prompt.User.Split('\n').Where(l => l.StartsWith("=== ")).Select(l => l[4..^4]);
             var json = JsonSerializer.Serialize(new { files = paths.Select(p => new { path = p, summary = $"About {p}" }) });
             return Task.FromResult(StructuredOutput.Parse<T>(json)!);
@@ -73,7 +76,7 @@ public sealed class RepoMapServiceTests : IDisposable
         var seen = new List<ChatPrompt>();
         var chat = new EchoChat(seen);
 
-        var result = await new RepoMapService(_db, _gitHub, chat, _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+        var result = await new RepoMapService(_db, _gitHub, chat, _embeddings, Options, NullLogger<RepoMapService>.Instance).UpdateAsync(App);
 
         Assert.True(result.Complete);
         Assert.Equal(2, result.Summarized);
@@ -97,9 +100,9 @@ public sealed class RepoMapServiceTests : IDisposable
         Head("c1", File("src/a.cs", "s1"));
         var seen = new List<ChatPrompt>();
         var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance);
-        await sut.RefreshAsync(App);
+        await sut.UpdateAsync(App);
 
-        var result = await sut.RefreshAsync(App);
+        var result = await sut.UpdateAsync(App);
 
         Assert.True(result.UpToDate);
         Assert.Single(seen);
@@ -113,10 +116,10 @@ public sealed class RepoMapServiceTests : IDisposable
         var seen = new List<ChatPrompt>();
         var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance);
         Head("c1", File("src/a.cs", "a1"), File("src/b.cs", "b1"), File("src/c.cs", "c1"));
-        await sut.RefreshAsync(App);
+        await sut.UpdateAsync(App);
 
         Head("c2", File("src/a.cs", "a1"), File("src/b.cs", "b2"));
-        var result = await sut.RefreshAsync(App);
+        var result = await sut.UpdateAsync(App);
 
         Assert.Equal(1, result.Summarized);
         Assert.Equal(1, result.Removed);
@@ -137,7 +140,7 @@ public sealed class RepoMapServiceTests : IDisposable
         var seen = new List<ChatPrompt>();
 
         var result = await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance)
-            .RefreshAsync(App);
+            .UpdateAsync(App);
 
         Assert.True(result.Complete);
         Assert.Empty(seen);
@@ -151,7 +154,7 @@ public sealed class RepoMapServiceTests : IDisposable
         Head("c1", File("src/a.cs", "s1"), File("src/b.cs", "s2"));
         var chat = new FakeChat("""{"files":[{"path":"src/a.cs","summary":"Checkout."}]}""");
 
-        var result = await Sut(chat).RefreshAsync(App);
+        var result = await Sut(chat).UpdateAsync(App);
 
         Assert.True(result.Complete);
         Assert.Equal("Checkout.", Rows()["src/a.cs"].Summary);
@@ -163,7 +166,7 @@ public sealed class RepoMapServiceTests : IDisposable
     {
         Head("c1", File("src/a.cs", "s1"));
 
-        var result = await Sut(new FakeChat(new OpenRouterException("queue", null, isTransient: true))).RefreshAsync(App);
+        var result = await Sut(new FakeChat(new OpenRouterException("queue", null, isTransient: true))).UpdateAsync(App);
 
         Assert.False(result.Complete);
         Assert.Empty(Rows());
@@ -182,7 +185,7 @@ public sealed class RepoMapServiceTests : IDisposable
     {
         Head("c1", File("src/a.cs", "s1"));
 
-        var result = await Sut(new FakeChat(new OpenRouterException("refused", status, isTransient: false))).RefreshAsync(App);
+        var result = await Sut(new FakeChat(new OpenRouterException("refused", status, isTransient: false))).UpdateAsync(App);
 
         Assert.False(result.Complete);
         Assert.Empty(Rows());
@@ -193,7 +196,7 @@ public sealed class RepoMapServiceTests : IDisposable
     {
         Head("c1", File("src/a.cs", "s1"));
 
-        var result = await Sut(new FakeChat(new OpenRouterException("refused", null, isTransient: false))).RefreshAsync(App);
+        var result = await Sut(new FakeChat(new OpenRouterException("refused", null, isTransient: false))).UpdateAsync(App);
 
         Assert.True(result.Complete);
         Assert.Equal("", Rows()["src/a.cs"].Summary);
@@ -205,33 +208,16 @@ public sealed class RepoMapServiceTests : IDisposable
         _gitHub.GetDefaultBranchHeadAsync(App, Arg.Any<CancellationToken>())
             .Returns<BranchHead>(_ => throw new HttpRequestException("down"));
 
-        var result = await Sut(new FakeChat("{}")).RefreshAsync(App);
+        var result = await Sut(new FakeChat("{}")).UpdateAsync(App);
 
         Assert.False(result.Complete);
     }
 
+    /// <summary>The startup check is the whole first build: one update summarizes every file, however many.</summary>
     [Fact]
-    public async Task A_large_first_build_is_spread_over_several_passes()
+    public async Task One_update_builds_a_large_map_completely()
     {
-        var files = Enumerable.Range(0, RepoMapService.MaxSummariesPerRefresh + 10)
-            .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
-        Head("c1", files);
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
-
-        var first = await sut.RefreshAsync(App);
-        var second = await sut.RefreshAsync(App);
-
-        Assert.False(first.Complete);
-        Assert.Equal(RepoMapService.MaxSummariesPerRefresh, first.Summarized);
-        Assert.True(second.Complete);
-        Assert.Equal(10, second.Summarized);
-    }
-
-    /// <summary>The startup check is the whole first build: passes run back to back until the map is complete.</summary>
-    [Fact]
-    public async Task An_update_runs_passes_until_the_map_is_complete()
-    {
-        var files = Enumerable.Range(0, RepoMapService.MaxSummariesPerRefresh * 2 + 10)
+        var files = Enumerable.Range(0, 910)
             .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
         Head("c1", files);
 
@@ -260,16 +246,20 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.DoesNotContain("=== src/a.cs", seen[^1].User);
     }
 
+    /// <summary>Batches already running still land, but no further one starts: the next check resumes.</summary>
     [Fact]
-    public async Task An_update_stops_when_a_pass_makes_no_progress()
+    public async Task A_transient_failure_starts_no_further_batches()
     {
-        Head("c1", File("src/a.cs", "s1"));
+        var files = Enumerable.Range(0, RepoMapService.MaxFilesPerBatch * RepoMapService.SummaryConcurrency * 3)
+            .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
+        Head("c1", files);
         var chat = new FakeChat(new OpenRouterException("queue", null, isTransient: true));
 
         var result = await Sut(chat).UpdateAsync(App);
 
         Assert.False(result.Complete);
-        Assert.Single(chat.Calls); // one failed pass, not MaxPassesPerUpdate of them
+        Assert.InRange(chat.Calls.Count, 1, RepoMapService.SummaryConcurrency);
+        Assert.Empty(Rows());
     }
 
     [Fact]
@@ -372,8 +362,118 @@ public sealed class RepoMapServiceTests : IDisposable
         Head("c1", files);
         var seen = new List<ChatPrompt>();
 
-        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).UpdateAsync(App);
 
         Assert.Equal(2, seen.Count);
+    }
+
+    /// <summary>At the configured medium, a batch of one-line summaries took ~10 s — most of a first build.</summary>
+    [Fact]
+    public async Task Summaries_run_at_the_lower_summary_reasoning_effort()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var seen = new List<ChatPrompt>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).UpdateAsync(App);
+
+        Assert.Equal(RepoMapService.SummaryReasoningEffort, Assert.Single(seen).ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task Blobs_are_fetched_several_at_a_time_and_summarized_in_tree_order()
+    {
+        var files = Enumerable.Range(0, RepoMapService.BlobFetchConcurrency * 2)
+            .Select(i => File($"src/f{i:D2}.cs", $"s{i}")).ToArray();
+        Head("c1", files);
+        var inFlight = 0;
+        var maxInFlight = 0;
+        _gitHub.GetBlobTextAsync(App, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                lock (files) maxInFlight = Math.Max(maxInFlight, ++inFlight);
+                await Task.Delay(20);
+                lock (files) inFlight--;
+                return (string?)$"contents of {call.ArgAt<string>(1)}";
+            });
+        var seen = new List<ChatPrompt>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).UpdateAsync(App);
+
+        Assert.Equal(RepoMapService.BlobFetchConcurrency, maxInFlight);
+        var order = seen.SelectMany(p => p.User.Split('\n').Where(l => l.StartsWith("=== ")).Select(l => l[4..^4]));
+        Assert.Equal(files.Select(f => f.Path), order);
+    }
+
+    /// <summary>A first build runs for minutes; it says what it is doing and how far it got, so it never looks hung.</summary>
+    [Fact]
+    public async Task An_update_logs_what_changed_its_progress_and_the_outcome()
+    {
+        var files = Enumerable.Range(0, 250).Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
+        Head("c1234567890", files);
+        var logger = new ListLogger<RepoMapService>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, logger).UpdateAsync(App);
+
+        var info = logger.Messages(Microsoft.Extensions.Logging.LogLevel.Information).ToList();
+        Assert.Contains(info, m => m.Contains("at c123456") && m.Contains("250 of 250 file(s) new or changed; summarizing them"));
+        Assert.Contains(info, m => m.Contains("100 of 250 file(s) summarized so far"));
+        Assert.Contains(info, m => m.Contains("200 of 250 file(s) summarized so far"));
+        Assert.Contains(info, m => m.Contains("250 of 250 file(s) summarized in") && !m.Contains("next check"));
+    }
+
+    [Fact]
+    public async Task Several_batches_are_summarized_at_once()
+    {
+        var files = Enumerable.Range(0, RepoMapService.MaxFilesPerBatch * RepoMapService.SummaryConcurrency * 2)
+            .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
+        Head("c1", files);
+        var chat = new SlowEchoChat();
+
+        var result = await new RepoMapService(_db, _gitHub, chat, _embeddings, Options, NullLogger<RepoMapService>.Instance).UpdateAsync(App);
+
+        Assert.True(result.Complete);
+        Assert.Equal(files.Length, Rows().Count(r => r.Value.Summary.StartsWith("About ")));
+        Assert.Equal(RepoMapService.SummaryConcurrency, chat.MaxInFlight);
+    }
+
+    /// <summary>Echoes like <see cref="EchoChat"/>, but each call takes a moment, and records how many overlapped.</summary>
+    private sealed class SlowEchoChat : IOpenRouterChat
+    {
+        private readonly EchoChat _echo = new([]);
+        private int _inFlight;
+        public int MaxInFlight { get; private set; }
+
+        public async Task<T> CompleteAsync<T>(ChatPrompt prompt, ChatUrgency urgency, CancellationToken ct = default) where T : class
+        {
+            lock (_echo) MaxInFlight = Math.Max(MaxInFlight, ++_inFlight);
+            await Task.Delay(30, ct);
+            lock (_echo) _inFlight--;
+            return await _echo.CompleteAsync<T>(prompt, urgency, ct);
+        }
+    }
+
+    [Fact]
+    public void Batches_are_planned_by_file_count_and_by_size()
+    {
+        var small = Enumerable.Range(0, RepoMapService.MaxFilesPerBatch + 1).Select(i => new TreeFile($"s{i}.cs", $"s{i}", 100)).ToList();
+        // Sized by the characters a file can contribute: anything larger is cut to MaxCharsPerFile.
+        var large = Enumerable.Range(0, 10).Select(i => new TreeFile($"l{i}.cs", $"l{i}", 150_000)).ToList();
+
+        Assert.Equal([RepoMapService.MaxFilesPerBatch, 1], RepoMapService.PlanBatches(small).Select(b => b.Count));
+        var perBatch = (int)Math.Ceiling((double)RepoMapService.MaxCharsPerBatch / RepoMapService.MaxCharsPerFile);
+        Assert.Equal([perBatch, 10 - perBatch], RepoMapService.PlanBatches(large).Select(b => b.Count));
+    }
+
+    [Fact]
+    public async Task An_unchanged_map_logs_nothing()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
+        await sut.UpdateAsync(App);
+        var logger = new ListLogger<RepoMapService>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, logger).UpdateAsync(App);
+
+        Assert.Empty(logger.Entries);
     }
 }

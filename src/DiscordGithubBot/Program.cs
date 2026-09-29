@@ -51,7 +51,8 @@ if (!string.IsNullOrEmpty(dbDirectory)) Directory.CreateDirectory(dbDirectory);
 builder.Services.AddBotServices(options);
 
 // A dry run is for tuning: the decision client logs every raw answer at Debug, and the HTTP client's
-// per-request lines and EF's SQL would bury them.
+// per-request lines and EF's SQL would bury them. appsettings.json already quiets both, but a dry run started
+// without its content root (plain `dotnet run` from the repository root) never reads that file.
 if (args is ["--dry-run", ..])
 {
     builder.Logging.AddFilter("DiscordGithubBot", LogLevel.Debug);
@@ -60,6 +61,7 @@ if (args is ["--dry-run", ..])
 }
 
 using var host = builder.Build();
+var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DiscordGithubBot.Startup");
 
 // The bot ships no migrations: it owns its SQLite file, and a schema from another build is rebuilt.
 using (var scope = host.Services.CreateScope())
@@ -67,10 +69,12 @@ using (var scope = host.Services.CreateScope())
     switch (DatabaseSchema.EnsureCurrent(scope.ServiceProvider.GetRequiredService<BotDbContext>()))
     {
         case SchemaChange.Upgraded:
-            Console.WriteLine($"Database schema upgraded to version {DatabaseSchema.Version}; all data kept.");
+            startupLogger.LogInformation("Database schema upgraded to version {Version}; all data kept.", DatabaseSchema.Version);
             break;
         case SchemaChange.Rebuilt:
-            Console.WriteLine($"Database schema was out of date; rebuilt it at version {DatabaseSchema.Version}.");
+            startupLogger.LogWarning(
+                "Database schema was out of date and had no upgrade path; rebuilt it empty at version {Version}.",
+                DatabaseSchema.Version);
             break;
     }
 }
@@ -131,5 +135,6 @@ if (args is ["--dry-run", var dryRepo, var reportText])
     }
 }
 
+StartupLog.Write(startupLogger, options);
 await host.RunAsync();
 return 0;

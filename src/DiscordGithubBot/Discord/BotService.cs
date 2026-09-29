@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
@@ -72,6 +73,9 @@ public sealed class BotService(
     /// </summary>
     private async Task OnReadyAsync()
     {
+        logger.LogInformation("Connected to Discord as {User} ({UserId}), in {Guilds} server(s).",
+            client.CurrentUser?.Username, client.CurrentUser?.Id, client.Guilds.Count);
+
         try
         {
             await interactions.RegisterCommandsGloballyAsync(deleteMissing: true);
@@ -105,6 +109,10 @@ public sealed class BotService(
         _ = Task.Run(async () =>
         {
             await using var scope = scopeFactory.CreateAsyncScope();
+            var what = Describe(interaction);
+            var who = $"{interaction.User.Username} ({interaction.User.Id})";
+            var where = Where(interaction.GuildId);
+            var started = Stopwatch.GetTimestamp();
 
             try
             {
@@ -114,20 +122,45 @@ public sealed class BotService(
                 if (!result.IsSuccess)
                 {
                     logger.LogWarning(
-                        "Interaction {InteractionId} failed: {Error} — {Reason}",
-                        interaction.Id, result.Error, result.ErrorReason);
+                        "{What} from {User} in {Where} failed: {Error} — {Reason}",
+                        what, who, where, result.Error, result.ErrorReason);
                     await TryApologizeAsync(interaction);
+                    return;
                 }
+
+                logger.LogInformation("Handled {What} from {User} in {Where} in {Seconds:0.0} s.",
+                    what, who, where, Stopwatch.GetElapsedTime(started).TotalSeconds);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Unhandled error while executing interaction {InteractionId}.", interaction.Id);
+                logger.LogError(ex, "Unhandled error while handling {What} from {User} in {Where}.", what, who, where);
                 await TryApologizeAsync(interaction);
             }
         });
 
         return Task.CompletedTask;
     }
+
+    /// <summary>What the user did, in the terms they saw: <c>/issue</c>, the modal, a button or a menu.</summary>
+    private static string Describe(SocketInteraction interaction) => interaction switch
+    {
+        SocketSlashCommand command => $"/{command.Data.Name}",
+        SocketModal modal => $"the report modal ({modal.Data.CustomId})",
+        SocketMessageComponent { Data.Type: ComponentType.Button } button => $"button {button.Data.CustomId}",
+        SocketMessageComponent component => $"menu {component.Data.CustomId}",
+        _ => $"a {interaction.Type} interaction",
+    };
+
+    /// <summary>
+    /// A server the bot is in is named; a user-installed command elsewhere only has an id (or none, in DMs),
+    /// because the bot is not a member there and has no cache entry to name it from.
+    /// </summary>
+    private string Where(ulong? guildId) => guildId switch
+    {
+        null => "a DM",
+        { } id when client.GetGuild(id) is { } guild => $"server {guild.Name} ({id})",
+        { } id => $"server {id} (user install)",
+    };
 
     /// <summary>
     /// Last line of defence: a click the framework could not route — a button left over from an older

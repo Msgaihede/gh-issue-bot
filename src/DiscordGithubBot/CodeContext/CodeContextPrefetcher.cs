@@ -69,14 +69,15 @@ public sealed class CodeContextPrefetcher(IServiceScopeFactory scopes, ILogger<C
             // "" records "built, nothing worth adding", so a confirmation after a restart does not build again.
             await services.GetRequiredService<IPendingReportStore>().SetCodeContextAsync(pendingReportId, markdown ?? "");
 
-            logger.LogInformation("Code context for {Repo} ready in {Seconds:0.0} s ({Outcome}); AI usage {Usage}.",
-                app.Repo, clock.Elapsed.TotalSeconds, markdown is null ? "nothing to add" : "added",
+            logger.LogInformation("Code context for report {ReportId} in {Repo} ready in {Seconds:0.0} s ({Outcome}); AI usage {Usage}.",
+                Pipeline.ReportPipeline.ShortId(pendingReportId), app.Repo, clock.Elapsed.TotalSeconds, markdown is null ? "nothing to add" : "added",
                 services.GetRequiredService<AiUsageMeter>());
             return markdown;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Building code context in the background for {Repo} failed; the issue goes without.", app.Repo);
+            logger.LogWarning(ex, "Building code context in the background for report {ReportId} in {Repo} failed; the issue goes without.",
+                Pipeline.ReportPipeline.ShortId(pendingReportId), app.Repo);
             return null;
         }
     }

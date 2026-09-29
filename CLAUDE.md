@@ -88,6 +88,9 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   or its installation-token cache is worthless. The App private key is parsed
   at startup, so an inline PEM in an env var (literal `\n`, not newlines)
   fails validation — use `PrivateKeyPath` outside key-per-file secrets.
+- Library log categories (HTTP client, EF) are quieted in appsettings.json,
+  not code, so env vars can raise them again. Log what the bot does at
+  Information in its own words; per-call detail belongs at Debug.
 - The Docker image sets `Database__Path=/data/app.db`; a `.env` (or any env var)
   with a relative path overrides it and puts the db under root-owned `/app`,
   which crash-loops the container. `.env.example` keeps that key commented out.

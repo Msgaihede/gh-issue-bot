@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using DiscordGithubBot.CodeContext.Retrieval;
 using DiscordGithubBot.Configuration;
@@ -19,16 +20,10 @@ public sealed record RepoMapRefresh(bool UpToDate, bool Complete, int Summarized
 public interface IRepoMapService
 {
     /// <summary>
-    /// One pass: moves the app's map towards its default branch's head, summarizing at most
-    /// <see cref="RepoMapService.MaxSummariesPerRefresh"/> added or changed files. Never throws on a GitHub or
-    /// model failure — logs and reports the map incomplete.
-    /// </summary>
-    Task<RepoMapRefresh> RefreshAsync(AppConfig app, CancellationToken ct = default);
-
-    /// <summary>
-    /// Brings the map fully up to date: passes run back to back until it describes the branch head, or until a
-    /// pass makes no progress (a failure it has logged; the next update retries). Never throws on a GitHub or
-    /// model failure.
+    /// Brings the app's map up to its default branch's head: summarizes every file added or changed since the
+    /// last update (by blob SHA — unchanged files are never read again), drops deleted ones and embeds whatever
+    /// lacks a vector. Never throws on a GitHub or model failure — logs it and reports the map incomplete, and
+    /// the next update resumes where this one stopped.
     /// </summary>
     Task<RepoMapRefresh> UpdateAsync(AppConfig app, CancellationToken ct = default);
 }
@@ -40,21 +35,21 @@ public interface IRepoMapService
 /// the repository.
 /// </summary>
 /// <remarks>
-/// Refreshes are incremental on git's own identity: a file is summarized again only when its blob SHA
-/// changes, so after the first build a push that touches three files costs three summaries. A pass
-/// summarizes at most <see cref="MaxSummariesPerRefresh"/> files and saves; <see cref="UpdateAsync"/> runs
-/// passes back to back, so a first build completes in one update while each pass stays a checkpoint. A file the
+/// Updates are incremental on git's own identity: a file is summarized again only when its blob SHA
+/// changes, so after the first build a push that touches three files costs three summaries. One update takes
+/// every changed file, however many — the first build included. Files go to the model in batches, several
+/// batches at once, and each batch is saved as it lands, so a failure part-way keeps what was done. A file the
 /// model cannot or will not summarize is stored with an empty summary — it drops out of selection until
-/// it changes — so no pass can loop on paying for the same failure. A transient failure, and any request
-/// OpenRouter refuses outright (a bad key, exhausted credits, an unknown model), simply ends the pass and
-/// the next one resumes where it stopped: those say nothing about the files, and parking them would blank
-/// the map exactly when the operator's credit limit — the intended hard cap — is reached.
+/// it changes — so no update can loop on paying for the same failure. A transient failure, and any request
+/// OpenRouter refuses outright (a bad key, exhausted credits, an unknown model), starts no further batches
+/// and the next update resumes where this one stopped: those say nothing about the files, and parking them
+/// would blank the map exactly when the operator's credit limit — the intended hard cap — is reached.
 /// <para>
 /// Every summary is also embedded (path + summary, the text the retrieval spike measured), so an issue's files
-/// can be found by meaning as well as by keyword. A changed summary clears its vector; every check then embeds
+/// can be found by meaning as well as by keyword. A changed summary clears its vector; every update then embeds
 /// whatever summaries lack a vector from the configured model — which also fills in maps built before
 /// embeddings existed, and re-embeds a map whose embedding model was switched. An embedding failure never
-/// fails a check: keyword search covers those files until the next one.
+/// fails an update: keyword search covers those files until the next one.
 /// </para>
 /// </remarks>
 public sealed class RepoMapService(
@@ -66,11 +61,6 @@ public sealed class RepoMapService(
     /// <summary>Most files in one map; the shallowest paths win when a repository has more.</summary>
     internal const int MaxFiles = 2000;
 
-    internal const int MaxSummariesPerRefresh = 400;
-
-    /// <summary>Enough passes for a full <see cref="MaxFiles"/> build, plus one for the pass that confirms it.</summary>
-    internal const int MaxPassesPerUpdate = MaxFiles / MaxSummariesPerRefresh + 1;
-
     /// <summary>The head of a file says what it is; more would buy little and cost per token.</summary>
     internal const int MaxCharsPerFile = 8000;
 
@@ -78,6 +68,28 @@ public sealed class RepoMapService(
     internal const int MaxFilesPerBatch = 25;
 
     private const int MaxSummaryChars = 300;
+
+    /// <summary>
+    /// Summary batches in flight at once. One at a time, a first build of ~1,550 files was ~170 model calls
+    /// back to back; four keeps the flex queue and OpenRouter far from any limit while cutting that to a quarter.
+    /// </summary>
+    internal const int SummaryConcurrency = 4;
+
+    /// <summary>
+    /// Blobs fetched from GitHub at once, across all batches. Read one by one, the ~0.3 s per blob took a quarter
+    /// of a first build; a handful in flight stays far below GitHub's limit on concurrent requests.
+    /// </summary>
+    internal const int BlobFetchConcurrency = 8;
+
+    /// <summary>
+    /// One-line summaries need little thought, and at the configured <c>medium</c> each batch took ~10 s — most
+    /// of a first build. Not <c>none</c>: that level failed a structured answer in decision 99's comparison, and
+    /// a failed batch here is parked until its files change.
+    /// </summary>
+    internal const string SummaryReasoningEffort = "low";
+
+    /// <summary>A long update (a first build) logs its progress every this many files, so it never looks hung.</summary>
+    internal const int ProgressLogEvery = 100;
 
     private const string SystemPrompt = """
         You write the entries of a repository map: one line per file, which another model reads to decide
@@ -100,24 +112,6 @@ public sealed class RepoMapService(
 
     public async Task<RepoMapRefresh> UpdateAsync(AppConfig app, CancellationToken ct = default)
     {
-        var total = new RepoMapRefresh(UpToDate: true, Complete: false, 0, 0);
-
-        for (var pass = 0; pass < MaxPassesPerUpdate; pass++)
-        {
-            var result = await RefreshAsync(app, ct);
-            total = new RepoMapRefresh(
-                total.UpToDate && result.UpToDate, result.Complete,
-                total.Summarized + result.Summarized, total.Removed + result.Removed, total.Embedded + result.Embedded);
-
-            // No progress means a failure the pass already logged; going again now would repeat it.
-            if (result.Complete || result.Summarized == 0) break;
-        }
-
-        return total;
-    }
-
-    public async Task<RepoMapRefresh> RefreshAsync(AppConfig app, CancellationToken ct = default)
-    {
         var repoKey = app.Repo.ToLowerInvariant();
 
         try
@@ -139,7 +133,7 @@ public sealed class RepoMapService(
             db.RepoFiles.RemoveRange(gone);
             foreach (var row in gone) rows.Remove(row.Path);
 
-            // The state records the head this pass works towards; each row keeps the commit its own summary was
+            // The state records the head this update works towards; each row keeps the commit its own summary was
             // read at, which is what code links pin to.
             if (state is null) db.RepoMapStates.Add(state = new RepoMapState { RepoKey = repoKey, CommitSha = head.CommitSha });
             state.CommitSha = head.CommitSha;
@@ -147,12 +141,24 @@ public sealed class RepoMapService(
             state.UpdatedAtUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
+            // Only files whose blob differs from the one summarized — or that have no row yet — are read again.
             var stale = sources.Where(f => !rows.TryGetValue(f.Path, out var r) || r.BlobSha != f.BlobSha).ToList();
-            var summarized = await SummarizeAsync(
-                app, repoKey, head.CommitSha, stale.Take(MaxSummariesPerRefresh).ToList(), rows, ct);
+            if (stale.Count > 0)
+                logger.LogInformation(
+                    "Repository map of {Repo} at {Commit}: {Stale} of {Total} file(s) new or changed; summarizing them.",
+                    app.Repo, ShortSha(head.CommitSha), stale.Count, sources.Count);
+
+            var started = Stopwatch.GetTimestamp();
+            var summarized = await SummarizeAsync(app, repoKey, head.CommitSha, stale, rows, ct);
 
             state.IsComplete = summarized == stale.Count;
             await db.SaveChangesAsync(ct);
+
+            if (stale.Count > 0)
+                logger.LogInformation(
+                    "Repository map of {Repo}: {Summarized} of {Stale} file(s) summarized in {Seconds:0} s{Rest}.",
+                    app.Repo, summarized, stale.Count, Stopwatch.GetElapsedTime(started).TotalSeconds,
+                    state.IsComplete ? "" : "; the rest follow at the next check");
 
             var embedded = await EmbedMissingAsync(app, repoKey, ct);
             return new RepoMapRefresh(UpToDate: false, state.IsComplete, summarized, gone.Count, embedded);
@@ -163,7 +169,7 @@ public sealed class RepoMapService(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Refreshing the repository map of {Repo} failed; it will be retried.", app.Repo);
+            logger.LogWarning(ex, "Updating the repository map of {Repo} failed; it will be retried.", app.Repo);
             db.ChangeTracker.Clear();
             return new RepoMapRefresh(UpToDate: false, Complete: false, 0, 0);
         }
@@ -183,51 +189,101 @@ public sealed class RepoMapService(
         return sources.Take(MaxFiles).ToList();
     }
 
-    /// <returns>How many of <paramref name="files"/> ended the pass with a row matching their blob.</returns>
+    /// <summary>
+    /// Splits the files into model calls before anything is read, sized by the tree's byte counts (an upper bound
+    /// on the characters a file contributes once cut to <see cref="MaxCharsPerFile"/>), so batches can run in
+    /// parallel instead of each waiting to see how long the previous one's files turned out to be.
+    /// </summary>
+    internal static List<List<TreeFile>> PlanBatches(IReadOnlyList<TreeFile> files)
+    {
+        var batches = new List<List<TreeFile>>();
+        var batch = new List<TreeFile>();
+        var chars = 0L;
+
+        foreach (var file in files)
+        {
+            batch.Add(file);
+            chars += Math.Min(file.Size, MaxCharsPerFile);
+            if (batch.Count < MaxFilesPerBatch && chars < MaxCharsPerBatch) continue;
+
+            batches.Add(batch);
+            batch = [];
+            chars = 0;
+        }
+
+        if (batch.Count > 0) batches.Add(batch);
+        return batches;
+    }
+
+    /// <returns>How many of <paramref name="files"/> ended the update with a row matching their blob.</returns>
     private async Task<int> SummarizeAsync(
         AppConfig app, string repoKey, string commitSha, IReadOnlyList<TreeFile> files, Dictionary<string, RepoFile> rows,
         CancellationToken ct)
     {
         var done = 0;
-        var batch = new List<(TreeFile File, string Text)>();
-        var batchChars = 0;
+        var stopped = false;
+        using var fetchGate = new SemaphoreSlim(BlobFetchConcurrency);
+        // The context is not thread-safe: batches run in parallel, but only one at a time writes its rows.
+        using var dbGate = new SemaphoreSlim(1);
 
-        foreach (var file in files)
-        {
-            var text = await gitHub.GetBlobTextAsync(app, file.BlobSha, MaxCharsPerFile, ct);
-            if (text is null || string.IsNullOrWhiteSpace(text))
+        await Parallel.ForEachAsync(
+            PlanBatches(files),
+            new ParallelOptions { MaxDegreeOfParallelism = SummaryConcurrency, CancellationToken = ct },
+            async (batch, token) =>
             {
-                // Binary or empty: nothing to summarize, and nothing to retry until the blob changes.
-                Upsert(repoKey, commitSha, file, "", rows);
-                done++;
-                continue;
-            }
+                // After a transient failure no further batch starts; those already running still land.
+                if (Volatile.Read(ref stopped)) return;
 
-            batch.Add((file, text));
-            batchChars += text.Length;
-            if (batch.Count < MaxFilesPerBatch && batchChars < MaxCharsPerBatch) continue;
+                var texts = await Task.WhenAll(batch.Select(async file =>
+                {
+                    await fetchGate.WaitAsync(token);
+                    try { return await gitHub.GetBlobTextAsync(app, file.BlobSha, MaxCharsPerFile, token); }
+                    finally { fetchGate.Release(); }
+                }));
 
-            var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
-            if (flushed < 0) return done;
-            done += flushed;
-            batch.Clear();
-            batchChars = 0;
-        }
+                var readable = batch.Zip(texts, (file, text) => (File: file, Text: text))
+                    .Where(t => !string.IsNullOrWhiteSpace(t.Text))
+                    .Select(t => (t.File, Text: t.Text!))
+                    .ToList();
+                var summaries = readable.Count == 0 ? new Dictionary<string, string>() : await AskAsync(app, readable, token);
+                if (summaries is null) Volatile.Write(ref stopped, true);
 
-        if (batch.Count > 0)
-        {
-            var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
-            if (flushed >= 0) done += flushed;
-        }
+                await dbGate.WaitAsync(token);
+                try
+                {
+                    var settled = 0;
+                    foreach (var file in batch)
+                    {
+                        var isReadable = readable.Any(r => r.File == file);
+                        // Binary or empty: nothing to summarize, and nothing to retry until the blob changes.
+                        if (!isReadable) Upsert(repoKey, commitSha, file, "", rows);
+                        // A transient failure leaves the readable files for the next update to retry.
+                        else if (summaries is null) continue;
+                        // A file the model skipped is stored unsummarized, as a refusal is: asking again would most
+                        // likely pay for the same omission.
+                        else Upsert(repoKey, commitSha, file, summaries.GetValueOrDefault(file.Path, ""), rows);
+                        settled++;
+                    }
 
-        await db.SaveChangesAsync(ct);
+                    await db.SaveChangesAsync(token);
+                    LogProgress(app, done, done + settled, files.Count);
+                    done += settled;
+                }
+                finally
+                {
+                    dbGate.Release();
+                }
+            });
+
         return done;
     }
 
-    /// <returns>Files settled by this batch, or -1 when a transient failure should end the pass.</returns>
-    private async Task<int> FlushAsync(
-        AppConfig app, string repoKey, string commitSha, List<(TreeFile File, string Text)> batch,
-        Dictionary<string, RepoFile> rows, CancellationToken ct)
+    /// <returns>
+    /// Each file's cleaned summary by path (empty for a batch that failed permanently), or null when a transient
+    /// failure should stop the update.
+    /// </returns>
+    private async Task<Dictionary<string, string>?> AskAsync(
+        AppConfig app, List<(TreeFile File, string Text)> batch, CancellationToken ct)
     {
         var user = new StringBuilder($"Repository: {app.Repo}\n\n");
         foreach (var (file, text) in batch) user.Append("=== ").Append(file.Path).Append(" ===\n").Append(text).Append("\n\n");
@@ -236,37 +292,41 @@ public sealed class RepoMapService(
         try
         {
             answer = await chat.CompleteAsync<SummariesDto>(
-                new ChatPrompt("repo_map_summaries", SystemPrompt, user.ToString()), ChatUrgency.Background, ct);
+                new ChatPrompt("repo_map_summaries", SystemPrompt, user.ToString(), ReasoningEffort: SummaryReasoningEffort),
+                ChatUrgency.Background, ct);
         }
         catch (OpenRouterException ex) when (ex.IsTransient || ex.Status is not null)
         {
-            logger.LogWarning(ex, "Summarizing {Count} files of {Repo} failed; the next pass resumes here.", batch.Count, app.Repo);
-            return -1;
+            logger.LogWarning(ex, "Summarizing {Count} files of {Repo} failed; the next check resumes here.", batch.Count, app.Repo);
+            return null;
         }
         catch (OpenRouterException ex)
         {
             // An answer-level failure — a refusal, a truncated or off-schema answer — will repeat on the same
-            // input; paying for it every pass is worse than leaving these files out until they change.
+            // input; paying for it every check is worse than leaving these files out until they change.
             logger.LogWarning(ex, "Summarizing {Count} files of {Repo} failed permanently; they stay out of the map until they change.",
                 batch.Count, app.Repo);
-            foreach (var (file, _) in batch) Upsert(repoKey, commitSha, file, "", rows);
-            await db.SaveChangesAsync(ct);
-            return batch.Count;
+            return [];
         }
 
         var summaries = (answer.Files ?? [])
             .Where(s => !string.IsNullOrWhiteSpace(s.Path))
             .GroupBy(s => s.Path.Trim(), StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First().Summary ?? "", StringComparer.Ordinal);
+            .ToDictionary(g => g.Key, g => Clean(g.First().Summary ?? ""), StringComparer.Ordinal);
 
-        // A file the model skipped is stored unsummarized for the same reason a refusal is: asking again next
-        // pass would most likely pay for the same omission.
-        foreach (var (file, _) in batch)
-            Upsert(repoKey, commitSha, file, summaries.TryGetValue(file.Path, out var summary) ? Clean(summary) : "", rows);
-
-        await db.SaveChangesAsync(ct);
-        return batch.Count;
+        logger.LogDebug("Summarized {Count} file(s) of {Repo}, {Missing} of them left without a summary by the model.",
+            batch.Count, app.Repo, batch.Count(b => !summaries.ContainsKey(b.File.Path)));
+        return summaries;
     }
+
+    /// <summary>One line each time the count crosses a multiple of <see cref="ProgressLogEvery"/>.</summary>
+    private void LogProgress(AppConfig app, int before, int after, int total)
+    {
+        if (after / ProgressLogEvery > before / ProgressLogEvery && after < total)
+            logger.LogInformation("Repository map of {Repo}: {Done} of {Total} file(s) summarized so far.", app.Repo, after, total);
+    }
+
+    private static string ShortSha(string sha) => sha.Length > 7 ? sha[..7] : sha;
 
     private void Upsert(string repoKey, string commitSha, TreeFile file, string summary, Dictionary<string, RepoFile> rows)
     {
@@ -300,6 +360,9 @@ public sealed class RepoMapService(
             .Where(f => f.RepoKey == repoKey && f.Summary != "" && f.EmbeddingModel != model)
             .OrderBy(f => f.Path)
             .ToListAsync(ct);
+
+        if (missing.Count > 0)
+            logger.LogInformation("Embedding {Count} summaries of {Repo} with {Model}.", missing.Count, app.Repo, model);
 
         var embedded = 0;
         try

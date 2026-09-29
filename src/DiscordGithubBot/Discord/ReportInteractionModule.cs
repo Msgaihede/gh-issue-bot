@@ -80,6 +80,7 @@ public class ReportInteractionModule(
         var (resolved, error) = await ResolveAppAsync(app);
         if (error is not null)
         {
+            logger.LogInformation("Turned {User} ({UserId}) away: {Reason}", Context.User.Username, Context.User.Id, error);
             await RespondAsync(error, ephemeral: true);
             return;
         }
@@ -125,6 +126,7 @@ public class ReportInteractionModule(
         // Counted from here on, because this is where the report starts to cost money.
         if (rateLimiter.RetryAfter(Context.User.Id) is { } retryAt)
         {
+            LogRateLimited(retryAt);
             await FollowupAsync(RateLimitedMessage(retryAt), ephemeral: true);
             return;
         }
@@ -255,6 +257,7 @@ public class ReportInteractionModule(
         // Refused before the reporter types anything; the submit handler checks again.
         if (rateLimiter.RetryAfter(Context.User.Id) is { } retryAt)
         {
+            LogRateLimited(retryAt);
             await RespondAsync(RateLimitedMessage(retryAt), ephemeral: true);
             return;
         }
@@ -265,6 +268,7 @@ public class ReportInteractionModule(
             : (null, null, access.Error);
         if (error is not null)
         {
+            logger.LogInformation("Turned {User} ({UserId}) away: {Reason}", Context.User.Username, Context.User.Id, error);
             await RespondAsync(error, ephemeral: true);
             return;
         }
@@ -290,6 +294,10 @@ public class ReportInteractionModule(
         var access = await AppsHereAsync();
         return access.Error is null ? AppResolution.Resolve(access.Apps, appName) : (null, access.Error);
     }
+
+    private void LogRateLimited(DateTimeOffset retryAt) =>
+        logger.LogInformation("{User} ({UserId}) is at the daily report limit; refused until {RetryAt:u}.",
+            Context.User.Username, Context.User.Id, retryAt);
 
     private static string RateLimitedMessage(DateTimeOffset retryAt) =>
         "You've sent the most reports allowed in a day. " +

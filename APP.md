@@ -121,16 +121,23 @@ starts from the right place:
   generated or minified code, assets, lock files, `.github/`, licences and
   codes of conduct are left out, as is anything over 200 KB; a repository with
   more than 2000 such files keeps the shallowest 2000. The worker checks
-  every app **at startup and then every 10 minutes**: it asks GitHub for the
-  default branch's head (two calls when nothing changed) and summarizes every
-  file added or changed since the last check — compared by git blob SHA, so an
-  edit is never missed — and drops deleted ones. A check runs until the map is
-  complete, so the startup check is the whole first build (saved every 400
-  files; a mid-sized repository takes a few minutes on flex). A request
-  OpenRouter refuses outright (credits exhausted, bad key) ends the check
-  without losing anything; the next check picks up where it stopped. Reports
-  filed within 10 minutes of a push can still see the previous version of the
-  files it changed.
+  every app **at startup and then every 10 minutes**, on a background thread:
+  it asks GitHub for the default branch's head (two calls when nothing
+  changed) and summarizes every file added or changed since the last check —
+  compared by git blob SHA, so an edit is never missed and an unchanged file
+  is never paid for twice — and drops deleted ones. One check takes all the
+  changed files, however many, so the startup check is the whole first build.
+  Checks never overlap: a 10-minute tick that finds the previous check still
+  running is skipped (and logged), and the next tick tries again. Files go to
+  the model in batches of up to 25 (60k characters), four batches at once,
+  each saved as it lands; file contents are fetched eight at a time, and
+  summaries run at reasoning `low` whatever `ReasoningEffort` says. (One batch
+  at a time, at `medium`, with one fetch at a time, mtg-grimoire's ~1,550
+  files took about 35 minutes.) A request OpenRouter refuses outright
+  (credits exhausted, bad key) or a transient failure starts no further
+  batches and loses nothing already saved; the next check picks up where it
+  stopped. Reports filed within 10 minutes of a push can still see the
+  previous version of the files it changed.
 - **Embeddings.** Every summary (with its path) is also embedded with
   `voyageai/voyage-4`, so files can be found by meaning, not only by shared
   words. A changed summary gets a new vector; each check embeds whatever lacks
@@ -248,7 +255,8 @@ reporter waits on it before seeing anything, and flex more than doubled it
 Search terms, code notes, duplicate comments and the repository map stay on
 flex; background work waits out the queue.
 
-**Reasoning effort** is `medium` for every GPT-6 Luna call, set by
+**Reasoning effort** is `medium` for every GPT-6 Luna call except the
+repository map's one-line summaries (always `low`), set by
 `OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
 model's own default; anything else fails startup. Read side by side on real
@@ -316,6 +324,34 @@ Jev decision's raw probabilities (Debug log). It stores no report and posts
 nothing to Discord or GitHub (it does update the issue cache and the map).
 Adjust the named constants in `DuplicateFinder`, `DraftReviewer`,
 `CodeContextBuilder` if a clear case lands on the wrong side of a gate.
+
+## Logs
+
+Every line is one line (`Logging:Console:FormatterOptions:SingleLine`), and
+what the bot does is logged at Information in its own words; the HTTP client
+factory's four lines per request and Entity Framework's SQL are off
+(`System.Net.Http.HttpClient` and `Microsoft` log at Warning, so their
+failures still show). At startup the bot logs its models, database, and every
+app with its auth mode, servers and channels (never a secret), then "Connected
+to Discord as …". After that, expect:
+
+- one line per interaction: `Handled /issue from alice (123) in server Foo
+  (456) in 0.4 s.` — or why it failed, or why the user was turned away (no
+  app available, daily limit);
+- per report, keyed by an eight-digit report id: `Drafted Bug report 1a2b3c4d
+  … "title", labels …; no duplicate …`, then `Code context for report
+  1a2b3c4d … ready`, then `Created issue #684 … <url>`, `Commented on …` or
+  `Report 1a2b3c4d was cancelled` — each with its AI usage;
+- per repository-map check that has work: how many files are new or changed,
+  progress every 100 files, how many were summarized, then one summary line
+  with its duration and cost — or that a tick was skipped because the
+  previous check is still running.
+
+To see more, raise a category with an environment variable, e.g.
+`Logging__LogLevel__DiscordGithubBot=Debug` (every model call with its
+tokens, cost and duration; every map batch) or
+`Logging__LogLevel__System.Net.Http.HttpClient=Information` (every HTTP
+request).
 
 ## Configuration
 

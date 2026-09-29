@@ -1501,3 +1501,48 @@ below record the choices inside it that are not obvious from the code.
      nothing the reply asks the user to retry instead of claiming they are
      in no server. The modal submit runs the same check again. The rate
      limit (decision 87) stays: it guards spend, not access.
+
+102. **Logs say what the bot did; library chatter is off; the repository
+     map builds faster.** A production first build of mtg-grimoire's map
+     (~1,550 files) looked like an endless loop: ~35 minutes of nothing but
+     the HTTP client factory's four lines per request, because the worker
+     logged only once the whole check was done. It was progressing — no blob
+     was fetched twice. `appsettings.json` now sets
+     `System.Net.Http.HttpClient` to Warning (EF was already quiet under
+     `Microsoft`) and the console to one line per entry; both stay
+     overridable through `Logging__…` environment variables, which is why
+     the filters live in configuration rather than code. The bot's own
+     Information lines now cover startup (models, database, each app's auth
+     mode and servers — never a secret), the Discord connection, every
+     interaction (who, where, how long, or why it was refused), each report
+     from draft to issue under an eight-digit report id, and each map pass
+     (how many files are left). Two causes of the slow build went with it:
+     summaries ran at the configured `medium` reasoning, ~10 s per batch, and
+     blobs were fetched one at a time, ~0.3 s each. Summaries now always run
+     at `low` (a `ChatPrompt` may override the effort) — not `none`, which
+     failed a structured answer in decision 99's comparison, and a failed
+     batch here is parked until its files change — and blobs are fetched
+     eight at a time, a chunk at once, so a pass that stops on a model
+     failure has not read the rest of its files for nothing. Not measured
+     live yet: the next first build's pass lines will show the new rate.
+
+103. **One map check takes every changed file, four batches at once, and
+     checks never overlap.** Supersedes decision 94's 400-file passes and its
+     "10 minutes after the previous check ends". The owner's call: the
+     startup check should update everything that changed in one go, and the
+     10-minute schedule should hold — a tick that finds the previous check
+     still running is skipped and logged, and the next tick tries again.
+     Only changed files are read: the blob-SHA comparison is unchanged. The
+     worker drives a `PeriodicTimer` (first check immediately) and starts each
+     check with `Task.Run` through `NonOverlappingRunner`, so the startup
+     build never sits on the host's startup path. Batches are now planned up
+     front from the tree's byte counts (an upper bound on each file's
+     characters once cut to 8,000), which is what lets four run at once
+     (`SummaryConcurrency`); blob fetches share one limit of eight across
+     them, and the database context, which is not thread-safe, is written by
+     one batch at a time. Each batch is still saved as it lands, so a check
+     that fails part-way keeps its work; a transient failure lets running
+     batches land but starts no new one, where the old loop went straight into
+     another pass. Four is a guess at a safe level for the flex queue, not a
+     measurement; a long check logs progress every 100 files so the next
+     first build shows the real rate.

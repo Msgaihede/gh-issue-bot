@@ -15,8 +15,13 @@ public sealed class FakeChat(params object[] replies) : IOpenRouterChat
     public Task<T> CompleteAsync<T>(ChatPrompt prompt, ChatUrgency urgency, CancellationToken ct = default)
         where T : class
     {
-        Calls.Add((prompt, urgency));
-        var reply = replies[Math.Min(_call++, replies.Length - 1)];
+        object reply;
+        // Locked: the repository map sends several batches at once.
+        lock (Calls)
+        {
+            Calls.Add((prompt, urgency));
+            reply = replies[Math.Min(_call++, replies.Length - 1)];
+        }
 
         return reply switch
         {

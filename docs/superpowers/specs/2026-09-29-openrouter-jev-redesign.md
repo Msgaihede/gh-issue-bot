@@ -61,7 +61,8 @@ Two thin typed `HttpClient`s (no .NET SDK exists; same reasoning as decision
 
 - **Chat** — `POST /api/v1/chat/completions` with `response_format:
   json_schema` (strict; schema generated from the C# DTO), `reasoning.effort`
-  (default `low`), and `provider: { order: ChatProviders, allow_fallbacks:
+  (default `medium` since decision 99; the repository map's summaries always
+  `low`, decision 102), and `provider: { order: ChatProviders, allow_fallbacks:
   true, require_parameters: true }`. Default `ChatProviders` is
   `["openai/flex", "openai"]`: OpenRouter tries OpenAI's half-price flex
   endpoint first and falls through to the regular endpoint (then any other
@@ -145,11 +146,12 @@ prints the decisions, the cost, and each decision's raw probabilities.
   `.md`/`.mdx`/`.markdown`/`.rst`/`.adoc`; vendor/build/`.github` directories,
   generated code, licences and codes of conduct out; ≤200 KB; cap 2000
   files), and summarizes only new or changed blobs (batched, flex). The map
-  is marked complete only once every file is summarized; a check runs passes
-  of at most 400 files (each one saved) back to back until it is, so the
-  startup check is the full first build, and stops early only when a pass
-  makes no progress. A file the model refuses or skips is stored
-  unsummarized so no pass pays for it twice.
+  is marked complete only once every file is summarized; one check takes
+  every changed file (batches of up to 25, four at once, each saved), so the
+  startup check is the full first build, and a transient failure starts no
+  further batches. Checks never overlap: a tick that finds one running is
+  skipped (decision 103). A file the model refuses or skips is stored
+  unsummarized so no check pays for it twice.
 - **Retrieval** (decision 95/96): Luna writes developer search terms for the
   issue with the file tree in view; BM25 over path + summary and cosine over
   `voyageai/voyage-4` embeddings of path + summary each rank the files, fused
