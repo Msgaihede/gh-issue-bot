@@ -31,7 +31,7 @@ public static class DatabaseSchema
     /// the step from the previous version to <see cref="Upgrades"/> so existing data survives. 0 is an
     /// unstamped file, which covers every database written before the stamp existed.
     /// </summary>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>
     /// SQL that moves a file from the key version to the next one without losing rows. Only additive steps
@@ -44,6 +44,12 @@ public static class DatabaseSchema
         [
             "ALTER TABLE \"RepoFiles\" ADD COLUMN \"Embedding\" BLOB NOT NULL DEFAULT x'';",
             "ALTER TABLE \"RepoFiles\" ADD COLUMN \"EmbeddingModel\" TEXT NOT NULL DEFAULT '';",
+        ],
+        // 6 -> 7: code context built in the background, stored on the pending report.
+        [6] =
+        [
+            "ALTER TABLE \"PendingReports\" ADD COLUMN \"CodeContext\" TEXT NULL;",
+            "ALTER TABLE \"PendingReports\" ADD COLUMN \"CodeContextReadyAtUtc\" TEXT NULL;",
         ],
     };
 

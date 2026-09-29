@@ -22,7 +22,7 @@ public class ReportPipelineTests
     private readonly IGitHubService _gitHub = Substitute.For<IGitHubService>();
     private readonly IImageUploader _uploader = Substitute.For<IImageUploader>();
     private readonly IAdditionalInfoExtractor _extractor = Substitute.For<IAdditionalInfoExtractor>();
-    private readonly ICodeContextBuilder _codeContext = Substitute.For<ICodeContextBuilder>();
+    private readonly ICodeContextPrefetcher _codeContext = Substitute.For<ICodeContextPrefetcher>();
     private readonly ReportPipeline _sut;
 
     private static readonly AppConfig App = new()
@@ -262,12 +262,12 @@ public class ReportPipelineTests
     }
 
     [Fact]
-    public async Task CreateIssue_appends_the_code_context_built_from_the_draft()
+    public async Task CreateIssue_appends_the_prefetched_code_context()
     {
         var id = Guid.NewGuid();
-        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
-        _codeContext.BuildAsync(App, Arg.Is<IssueDraft>(d => d.Title == "T" && d.Body == "B"), Arg.Any<CancellationToken>())
-            .Returns("### Relevant code\n- `src/a.cs`");
+        var report = Pending(id);
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(report);
+        _codeContext.GetAsync(report, App, Arg.Any<CancellationToken>()).Returns("### Relevant code\n- `src/a.cs`");
         _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(new GitHubIssue(101, "T", "B", "open", DateTime.UtcNow, null, "https://gh/101"));
 
@@ -277,16 +277,31 @@ public class ReportPipelineTests
             Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
-    /// <summary>Code context is written at confirmation, so drafting, duplicates and cancels never pay for it.</summary>
+    /// <summary>
+    /// The code context is started once the draft is saved, so it is built while the reporter reads the
+    /// preview — for every outcome, since a reporter shown a duplicate can still ask for the draft.
+    /// </summary>
     [Fact]
-    public async Task Drafting_a_report_never_builds_code_context()
+    public async Task Drafting_a_report_starts_its_code_context_in_the_background()
     {
         SetupOpenIssues(Open(1));
         SetupVerdict(VerdictKind.Match, match: 1, shortlist: [1]);
 
-        await _sut.ProcessAsync(Submission());
+        var outcome = await _sut.ProcessAsync(Submission());
 
-        await _codeContext.DidNotReceiveWithAnyArgs().BuildAsync(default!, default!, default);
+        _codeContext.Received(1).Start(outcome.PendingReportId, App,
+            Arg.Is<IssueDraft>(d => d.Title == "Draft title" && d.Body == "Draft body"));
+    }
+
+    [Fact]
+    public async Task A_failed_draft_starts_no_code_context()
+    {
+        _normalizer.NormalizeAsync(Arg.Any<ReportType>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<NormalizedReport>(_ => throw new NormalizationException("no draft"));
+
+        await Assert.ThrowsAsync<NormalizationException>(() => _sut.ProcessAsync(Submission()));
+
+        _codeContext.DidNotReceiveWithAnyArgs().Start(default, default!, default!);
     }
 
     [Fact]

@@ -61,6 +61,15 @@ public class PendingReport
     public DateTime CreatedAtUtc { get; set; }
 
     /// <summary>
+    /// The code-context block for the issue body, built in the background after the preview was shown; ""
+    /// when it was built and found nothing worth adding. Never shown in Discord.
+    /// </summary>
+    public string? CodeContext { get; set; }
+
+    /// <summary>When <see cref="CodeContext"/> was built; null while the build is running or never ran.</summary>
+    public DateTime? CodeContextReadyAtUtc { get; set; }
+
+    /// <summary>
     /// When a confirmation click took ownership of this report, or null while it is still up for grabs.
     /// Two clicks can land at the same instant; the one that wins the claim is the one that talks to
     /// GitHub, and a failed attempt clears the field so the reporter can press the button again.

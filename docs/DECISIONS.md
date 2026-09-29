@@ -1435,3 +1435,22 @@ below record the choices inside it that are not obvious from the code.
     retried — the setting formerly named `ChatRetryProviders`, renamed before
     first deployment. Decision 77's flex-first default and deadline are
     otherwise unchanged.
+
+98. **Code context is built in the background while the reporter reads the
+    preview.** Measured with the draft on the regular tier: the preview comes
+    ~5 s after submitting, and building the code context takes ~20–25 s on
+    flex — search terms ~3.6 s, retrieval and Jev ~1 s, reading the files and
+    writing the notes ~18.5 s. Built at "Create issue" (as before) that was the
+    wait after the click; built before the preview, the wait after
+    submitting. The owner's answer: the preview is for the reporter's own
+    text and needs no code references, so show it at once and spend the
+    reading time on the code context. `CodeContextPrefetcher` (a singleton,
+    each build in its own DI scope since the interaction's scope is gone)
+    starts the build when the draft is saved and stores the result on the
+    pending report ("" meaning "built, nothing to add"); the click takes the
+    stored block, awaits a build still running, or — after a restart lost the
+    task — builds it then. Everything stays on flex (only the draft is on the
+    regular tier, decision 97). The price is that every draft now pays for
+    its code context, duplicates and cancellations included — about $0.002
+    each — which the budget absorbs. Schema v7 adds the two columns as an
+    additive upgrade.

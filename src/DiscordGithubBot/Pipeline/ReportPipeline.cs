@@ -100,7 +100,7 @@ public sealed class ReportPipeline(
     IGitHubService gitHub,
     IImageUploader imageUploader,
     IAdditionalInfoExtractor extractor,
-    ICodeContextBuilder codeContext,
+    ICodeContextPrefetcher codeContext,
     AiUsageMeter usage,
     BotOptions options,
     ILogger<ReportPipeline> logger) : IReportPipeline
@@ -143,6 +143,10 @@ public sealed class ReportPipeline(
         };
 
         await store.SaveAsync(pending, ct);
+
+        // Built while the reporter reads the preview, so "Create issue" usually finds it ready. Started for
+        // every outcome: a reporter shown a duplicate can still choose "Not it — show my draft".
+        codeContext.Start(pending.Id, app, draft);
 
         logger.LogInformation(
             "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI usage {Usage}.",
@@ -193,12 +197,12 @@ public sealed class ReportPipeline(
 
         try
         {
-            // Code context is generated here, when the reporter confirms, and not at submit time: it is
-            // written into the GitHub issue only (never shown in Discord), and a report that turns out to be
-            // a duplicate or is cancelled never pays for it. It runs alongside the uploads; WhenAll waits for
-            // both even when one fails, so the claim release below never races the database.
+            // The code context was started in the background when the preview was shown, and is written into
+            // the GitHub issue only (never shown in Discord). Usually it is ready; if the reporter was quick it
+            // is awaited here, alongside the uploads. WhenAll waits for both even when one fails, so the claim
+            // release below never races the database.
             var uploading = UploadAttachmentsAsync(app, report, ct);
-            var enriching = codeContext.BuildAsync(app, new IssueDraft(report.DraftTitle, report.DraftBody), ct);
+            var enriching = codeContext.GetAsync(report, app, ct);
             await Task.WhenAll(uploading, enriching);
             var (images, failedUploads) = await uploading;
 

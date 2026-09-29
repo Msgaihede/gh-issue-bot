@@ -28,6 +28,27 @@ public sealed class PendingReportStoreTests : IDisposable
     };
 
     [Fact]
+    public async Task Code_context_is_stored_without_touching_a_claim()
+    {
+        var report = Report(Guid.NewGuid(), DateTime.UtcNow);
+        await _sut.SaveAsync(report);
+        var claimed = await _sut.TryClaimAsync(report.Id);
+
+        await _sut.SetCodeContextAsync(report.Id, "### Relevant code");
+
+        var stored = await _sut.GetAsync(report.Id);
+        Assert.Equal("### Relevant code", stored!.CodeContext);
+        Assert.NotNull(stored.CodeContextReadyAtUtc);
+        Assert.Equal(claimed!.ClaimedAtUtc, stored.ClaimedAtUtc);
+    }
+
+    [Fact]
+    public async Task Code_context_for_a_report_already_gone_is_ignored()
+    {
+        await _sut.SetCodeContextAsync(Guid.NewGuid(), "x"); // must not throw
+    }
+
+    [Fact]
     public async Task Save_get_round_trips_with_attachments()
     {
         var id = Guid.NewGuid();

@@ -64,7 +64,9 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   boilerplate (footer, screenshots, code context) and is cut before dedup
   reads it.
 - Code context is written to GitHub only — never render it in Discord (any
-  user can install the bot; private code must not leak).
+  user can install the bot; private code must not leak). It is built in the
+  background by `CodeContextPrefetcher` after the preview is shown and stored
+  on the pending report; the click only picks it up.
 - Commands are global and user-installable: never rely on `Context.Guild`;
   use `Context.Interaction.GuildId` and `BotOptions.AppsForContext`.
 - All interaction replies are ephemeral; only issue creations post publicly.

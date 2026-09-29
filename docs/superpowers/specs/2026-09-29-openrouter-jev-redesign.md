@@ -85,11 +85,13 @@ total AI spend, which is how the budget below is verified in production.
   ├─ in parallel:
   │   ├─ Jev review: title choice + one noul per repo label
   │   └─ Jev dedup: stage 1 shortlist → stage 2 verify
-  └─ save pending report → Discord preview (type, labels, title, body)
+  ├─ save pending report → Discord preview (type, labels, title, body)
+  └─ in the background, while the reporter reads the preview (decision 98):
+      code context — search terms → keyword + embedding shortlist → Jev picks
+      (≤4 code files, ≤2 docs) → fetch them → Luna notes → saved on the draft
 "Create issue" click
-  ├─ upload screenshots (unchanged)
-  ├─ code context: Jev selection over the repo map (≤4 code files, ≤2 docs)
-  │   → fetch them → Luna notes (paths validated against the selection)
+  ├─ upload screenshots (unchanged) ∥ take the saved code context (or await
+  │   the running build; build it now after a restart)
   └─ create issue with the chosen labels; announce (unchanged)
 ```
 
@@ -159,9 +161,10 @@ prints the decisions, the cost, and each decision's raw probabilities.
   picks are listed with their map summaries. The block is appended after the `MetaMarker`,
   so it never feeds dedup, with each link pinned to the commit its file was
   read at.
-- **Never in Discord:** generated at "Create issue" time and written only to
-  GitHub, so a Discord reporter (any installer, now) cannot use the bot to
-  read a private repo's code. Any failure → the issue is created without it.
+- **Never in Discord:** built in the background after the preview is shown
+  and written only to GitHub, so a Discord reporter (any installer, now)
+  cannot use the bot to read a private repo's code, and the preview does not
+  wait for it. Any failure → the issue is created without it.
 
 ## Discord
 

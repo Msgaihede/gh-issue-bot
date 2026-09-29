@@ -75,8 +75,10 @@ public sealed class DatabaseSchemaTests : IDisposable
             db.SaveChanges();
         }
 
-        // Turn the file back into a version-5 database: no embedding columns, stamped 5.
-        Exec("ALTER TABLE RepoFiles DROP COLUMN Embedding; ALTER TABLE RepoFiles DROP COLUMN EmbeddingModel; PRAGMA user_version = 5;");
+        // Turn the file back into a version-5 database: no embedding columns, no code-context columns, stamped 5.
+        Exec("ALTER TABLE RepoFiles DROP COLUMN Embedding; ALTER TABLE RepoFiles DROP COLUMN EmbeddingModel; " +
+             "ALTER TABLE PendingReports DROP COLUMN CodeContext; ALTER TABLE PendingReports DROP COLUMN CodeContextReadyAtUtc; " +
+             "PRAGMA user_version = 5;");
 
         using (var db = Context()) Assert.Equal(SchemaChange.Upgraded, DatabaseSchema.EnsureCurrent(db));
 

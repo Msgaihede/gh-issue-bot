@@ -84,8 +84,10 @@ publicly in the app's configured channel(s).
    first — with the classified type and the chosen labels in small print
    above the title — behind **Create issue** / **Cancel**. The duplicate path
    confirms against the matched issue instead.
-9. **Create or comment.** On create, in parallel: the screenshots upload to
-   GitHub, and the **code context** is built (see below). The body then gets
+9. **Create or comment.** The **code context** (see below) was started in the
+   background the moment the preview appeared, so it is usually ready by the
+   time the reporter clicks; if not, the click waits for the rest of it while
+   the screenshots upload to GitHub. The body then gets
    a `### Screenshots` gallery, the "Relevant code" / "Related docs" block,
    and a `_Created by **<name>** in Discord server **<server>**._` footer
    (`via Discord` when the server is unknown — a DM, or a server the bot is
@@ -134,8 +136,16 @@ starts from the right place:
   words. A changed summary gets a new vector; each check embeds whatever lacks
   one — which is also how an existing map, or a switch of embedding model,
   catches up (a 1,551-file map cost $0.0035 to embed).
-- **At "Create issue".** Reporters rarely use the code's vocabulary ("nothing
-  comes up" rather than `fts_query`), so finding the files is two-sided:
+- **While the reporter reads the preview.** The code context is for
+  maintainers, so the preview does not wait for it: it starts in the
+  background as soon as the preview is shown and is saved with the draft. On
+  "Create issue" it is usually ready (measured: the preview in ~5 s, the code
+  context ~20–25 s later on flex), so creating takes a few seconds; a
+  reporter who clicks sooner waits only for the remainder, and a draft that
+  outlived a bot restart gets its code context built at the click. It is built
+  for every draft, duplicates and cancelled ones included (~$0.002 each).
+  Reporters rarely use the code's vocabulary ("nothing comes up" rather than
+  `fts_query`), so finding the files is two-sided:
   1. GPT-6 Luna writes the search terms a developer would use, looking at the
      repository's file tree so the terms match the names this codebase uses;
   2. keyword search (BM25 over path + summary) and embedding search each rank
@@ -155,11 +165,11 @@ starts from the right place:
   "Related docs", each link pinned to the commit its file was read at (so it
   shows exactly the version the notes describe), and a line saying it is
   AI-generated.
-- **GitHub only.** The block is never shown in Discord — anyone who can run
-  the bot is not necessarily allowed to read a private repository's code — and
-  it is built only when an issue is actually created, so duplicates and
-  cancelled drafts cost nothing. The map covers the issue repository itself
-  (`Repo`), so the notes are exactly as visible as the code they describe.
+- **GitHub only.** The block is never shown in Discord: the preview is the
+  reporter's text, and anyone who can run the bot is not necessarily allowed
+  to read a private repository's code. The map covers the issue repository
+  itself (`Repo`), so the notes are exactly as visible as the code they
+  describe.
 - **Degradation.** If the notes cannot be written, the picked files are listed
   with their map summaries, marked as unread; if selection fails, or the map
   is not built yet, the issue is filed without the block.
@@ -241,7 +251,7 @@ per million input tokens with free output.
 | Luna: draft (reasoning low) | $0.0004 |
 | Jev: title + 40 labels | $0.0002 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
-| Code context — only for created issues: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
+| Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
 | **Total** | **≈ $0.0035** |
 
 1000 reports a month come to about **$3.50** on flex, about $5 if every chat
