@@ -273,4 +273,17 @@ public class OutcomeRendererTests
         Assert.Empty(Buttons(message));
         Assert.Contains("Working on it", Text(message));
     }
+
+    /// <summary>
+    /// Plain answers to a click replace a Components V2 message, which cannot take message content — so
+    /// even a one-line note travels as a text display.
+    /// </summary>
+    [Fact]
+    public void A_plain_note_is_a_text_display_with_no_buttons()
+    {
+        var message = OutcomeRenderer.RenderText("Cancelled — nothing was created.");
+
+        Assert.Empty(Buttons(message));
+        Assert.Equal("Cancelled — nothing was created.", Text(message));
+    }
 }

@@ -103,8 +103,10 @@ publicly in the app's configured channel(s).
 Between the modal submit and that final click the draft (with the downloaded
 screenshot bytes and the chosen labels) lives in SQLite for **one hour**; an
 hourly background pass sweeps expired rows, and a click on an older message
-answers "that report is no longer waiting". Clicking a button also strips the
-buttons off the message it was clicked on, and the confirming click claims
+answers "that report is no longer waiting". Clicking a button turns the
+message it was clicked on into "⏳ Working on it…" (taking its buttons away),
+and the answer — confirmation, next step or error — then replaces that same
+message rather than arriving as a new one. The confirming click claims
 the draft in the database before it touches GitHub, so the same report cannot
 be filed twice. A confirmation that fails — GitHub down, say — gives the claim
 back, so the draft and its buttons still work for a retry.
@@ -613,7 +615,9 @@ configured app. Enable **User Install** in the Developer Portal first.
    if a doc fits, "Related docs") block linking to real files at a commit,
    and the `_Created by …_` footer; that a public announcement appears in the
    app's channel(s); and that everything in the command channel was
-   ephemeral. The log line for the creation states the AI cost.
+   ephemeral. The preview turns into "⏳ Working on it…" and then into the
+   "✅ Created #N" confirmation — one message throughout, no second one below
+   it. The log line for the creation states the AI cost.
 4. **Feature path.** Run `/issue` with a feature request; the preview says
    "Feature request" and uses the Summary / Motivation / Proposed Solution
    template.

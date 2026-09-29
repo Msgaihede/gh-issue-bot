@@ -195,7 +195,7 @@ public class ReportInteractionModule(
         var pending = await pipeline.PeekAsync(id);
         if (pending is null)
         {
-            await FollowupEphemeralAsync(ExpiredMessage);
+            await AnswerClickAsync(ExpiredMessage);
             return;
         }
 
@@ -205,21 +205,21 @@ public class ReportInteractionModule(
         if (app is null) logger.LogWarning("No app configured for {Repo}; skipping the announcement.", pending.RepoKey);
         else await AnnounceAsync(app, issue, pending.Type, pending.ReporterDisplayName);
 
-        await FollowupEphemeralAsync(OutcomeRenderer.RenderCreated(issue));
+        await AnswerClickAsync(OutcomeRenderer.RenderCreated(issue));
     });
 
     [ComponentInteraction("rep|cancel|*|*", runMode: RunMode.Sync)]
     public Task OnCancel(string pendingSegment, string issueSegment) => RunAsync(async (id, _) =>
     {
         await pipeline.CancelAsync(id);
-        await FollowupEphemeralAsync(CancelledMessage);
+        await AnswerClickAsync(CancelledMessage);
     });
 
     [ComponentInteraction("rep|comment|*|*", runMode: RunMode.Sync)]
     public Task OnComment(string pendingSegment, string issueSegment) => RunAsync(async (id, issueNumber) =>
     {
         var comment = await pipeline.AddCommentAsync(id, issueNumber);
-        await FollowupEphemeralAsync(OutcomeRenderer.RenderCommented(comment));
+        await AnswerClickAsync(OutcomeRenderer.RenderCommented(comment));
     });
 
     [ComponentInteraction("rep|draft|*|*", runMode: RunMode.Sync)]
@@ -232,7 +232,7 @@ public class ReportInteractionModule(
         var pending = await pipeline.PeekAsync(id);
         if (pending is null)
         {
-            await FollowupEphemeralAsync(ExpiredMessage);
+            await AnswerClickAsync(ExpiredMessage);
             return;
         }
 
@@ -247,7 +247,7 @@ public class ReportInteractionModule(
             return;
         }
 
-        await FollowupEphemeralAsync(OutcomeRenderer.RenderMatch(candidate, id));
+        await AnswerClickAsync(OutcomeRenderer.RenderMatch(candidate, id));
     });
 
     // --- shared flow ---
@@ -336,7 +336,7 @@ public class ReportInteractionModule(
         if (!CustomIds.TryParse(customId, out _, out var id, out var issueNumber))
         {
             logger.LogWarning("Ignoring a component interaction with an unreadable custom id {CustomId}.", customId);
-            await FollowupEphemeralAsync("Sorry — I couldn't read that button. Please run the command again.");
+            await AnswerClickAsync("Sorry — I couldn't read that button. Please run the command again.");
             return;
         }
 
@@ -346,17 +346,17 @@ public class ReportInteractionModule(
         }
         catch (ExpiredPendingReportException)
         {
-            await FollowupEphemeralAsync(ExpiredMessage);
+            await AnswerClickAsync(ExpiredMessage);
         }
         catch (NormalizationException ex)
         {
             logger.LogWarning(ex, "Normalization failed while handling {CustomId}.", customId);
-            await FollowupEphemeralAsync(NormalizationErrorMessage);
+            await AnswerClickAsync(NormalizationErrorMessage);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Component interaction {CustomId} failed.", customId);
-            await FollowupEphemeralAsync(GenericErrorMessage);
+            await AnswerClickAsync(GenericErrorMessage);
         }
     }
 
@@ -364,6 +364,8 @@ public class ReportInteractionModule(
     /// Answers within the three-second window by replacing the clicked message with a "working" note,
     /// which also takes its buttons away — a second click on the same message becomes impossible instead
     /// of racing the first. If Discord refuses the update, a plain defer still acknowledges the click.
+    /// Either way the clicked message stays the interaction's original response, which is what
+    /// <see cref="AnswerClickAsync(MessageComponent)"/> later edits into the answer.
     /// </summary>
     private async Task AcknowledgeAsync()
     {
@@ -387,11 +389,11 @@ public class ReportInteractionModule(
         var pending = await pipeline.PeekAsync(id);
         if (pending is null)
         {
-            await FollowupEphemeralAsync(ExpiredMessage);
+            await AnswerClickAsync(ExpiredMessage);
             return;
         }
 
-        await FollowupEphemeralAsync(OutcomeRenderer.RenderDraftPreview(
+        await AnswerClickAsync(OutcomeRenderer.RenderDraftPreview(
             new IssueDraft(pending.DraftTitle, pending.DraftBody), pending.Type, ReportPipeline.Labels(pending),
             id, heading));
     }
@@ -429,7 +431,9 @@ public class ReportInteractionModule(
         }
     }
 
-    private Task FollowupEphemeralAsync(string text) => FollowupAsync(text, ephemeral: true);
+    /// <summary>Answers a click by replacing the "working on it" note it left, never with a second message.</summary>
+    private Task AnswerClickAsync(string text) => AnswerClickAsync(OutcomeRenderer.RenderText(text));
 
-    private Task FollowupEphemeralAsync(MessageComponent components) => FollowupAsync(components: components, ephemeral: true);
+    private Task AnswerClickAsync(MessageComponent components) =>
+        ClickedMessage.ReplaceAsync((IComponentInteraction)Context.Interaction, components, logger);
 }

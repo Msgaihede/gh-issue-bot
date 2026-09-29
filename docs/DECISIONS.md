@@ -1546,3 +1546,23 @@ below record the choices inside it that are not obvious from the code.
      another pass. Four is a guess at a safe level for the flex queue, not a
      measurement; a long check logs progress every 100 files so the next
      first build shows the real rate.
+
+## 2026-09-29 (click answers)
+
+104. **A click's answer replaces the clicked message; it is never a
+     follow-up.** Amends decision 31. Every button and select handler already
+     turned the clicked message into "⏳ Working on it…", but then sent its
+     answer with `FollowupAsync` — and a follow-up is always a new message,
+     so the working note stayed behind above a second message ("✅ Created
+     #686" under a "Click to see command" header). `ClickedMessage.ReplaceAsync`
+     now edits the interaction's original response instead, which after an
+     update (type 7) or a deferred update (type 6, the fallback when the
+     update is refused) is the clicked message itself. The edit sets
+     `MessageFlags.ComponentsV2` explicitly — Discord.Net adds it on sends
+     but not on `ModifyOriginalResponseAsync` — and plain answers travel as a
+     text display (`OutcomeRenderer.RenderText`), because a CV2 message cannot
+     take content. If the edit fails (the reporter may have dismissed the
+     note meanwhile), the answer goes out as a new ephemeral follow-up so the
+     reporter still learns an issue was created. The modal submit keeps
+     `FollowupAsync`: its first follow-up already fills the deferred
+     "thinking" message.
