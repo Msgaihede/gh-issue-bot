@@ -109,6 +109,51 @@ public sealed class CodeContextPrefetcherTests : IDisposable
     }
 
     [Fact]
+    public void A_stored_result_is_ready()
+    {
+        Assert.True(_sut.TryGetReady(Report(Guid.NewGuid(), "### Stored", DateTime.UtcNow), out var codeContext));
+        Assert.Equal("### Stored", codeContext);
+    }
+
+    [Fact]
+    public void A_stored_empty_result_is_ready_with_nothing_to_add()
+    {
+        Assert.True(_sut.TryGetReady(Report(Guid.NewGuid(), "", DateTime.UtcNow), out var codeContext));
+        Assert.Null(codeContext);
+    }
+
+    /// <summary>The build finishes after the click read the report, so the stored copy is not set yet.</summary>
+    [Fact]
+    public async Task A_finished_background_build_is_ready_before_it_is_stored_on_the_clicked_report()
+    {
+        var id = Guid.NewGuid();
+        _builder.BuildAsync(App, Draft, Arg.Any<CancellationToken>()).Returns("### Relevant code");
+        _sut.Start(id, App, Draft);
+        await _sut.GetAsync(Report(id), App);
+
+        Assert.True(_sut.TryGetReady(Report(id), out var codeContext));
+        Assert.Equal("### Relevant code", codeContext);
+    }
+
+    [Fact]
+    public void A_running_build_is_not_ready()
+    {
+        var id = Guid.NewGuid();
+        _builder.BuildAsync(App, Draft, Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource<string?>().Task);
+        _sut.Start(id, App, Draft);
+
+        Assert.False(_sut.TryGetReady(Report(id), out _));
+    }
+
+    /// <summary>After a restart there is nothing to be ready: the build has not even started.</summary>
+    [Fact]
+    public void With_nothing_stored_or_running_nothing_is_ready()
+    {
+        Assert.False(_sut.TryGetReady(Report(Guid.NewGuid()), out _));
+        _builder.DidNotReceiveWithAnyArgs().BuildAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task A_failed_background_build_means_no_block_rather_than_a_failed_issue()
     {
         var id = Guid.NewGuid();

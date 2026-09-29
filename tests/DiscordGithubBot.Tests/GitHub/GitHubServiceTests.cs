@@ -83,6 +83,43 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task GetIssue_reads_one_issue_by_number()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "repos/owner/repo/issues/42", HttpStatusCode.OK,
+            """{"number":42,"title":"T","body":"B","state":"open","updated_at":"2026-08-18T00:00:00Z","closed_at":null,"html_url":"u42"}""");
+
+        var issue = await Service(fake).GetIssueAsync(App, 42);
+
+        Assert.Equal(42, issue.Number);
+        Assert.Equal("B", issue.Body);
+        Assert.Equal("Bearer PAT123", Assert.Single(fake.Requests).AuthHeader);
+    }
+
+    /// <summary>Only the body is sent: a PATCH that also carried the title or labels would undo edits to them.</summary>
+    [Fact]
+    public async Task UpdateIssueBody_patches_the_body_alone()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Patch, "repos/owner/repo/issues/42", HttpStatusCode.OK, """{"number":42}""");
+
+        await Service(fake).UpdateIssueBodyAsync(App, 42, "New body");
+
+        var req = Assert.Single(fake.Requests);
+        Assert.Equal(HttpMethod.Patch, req.Method);
+        Assert.Equal("""{"body":"New body"}""", req.Body);
+    }
+
+    [Fact]
+    public async Task UpdateIssueBody_throws_on_a_failure_status()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Patch, "repos/owner/repo/issues/42", HttpStatusCode.Forbidden, "{}");
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Service(fake).UpdateIssueBodyAsync(App, 42, "B"));
+    }
+
+    [Fact]
     public async Task ListIssues_passes_state_and_since()
     {
         var fake = new FakeHttpMessageHandler();

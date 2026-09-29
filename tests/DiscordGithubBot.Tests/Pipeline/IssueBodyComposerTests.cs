@@ -207,6 +207,37 @@ public class IssueBodyComposerTests
             body);
     }
 
+    /// <summary>
+    /// A late edit replaces the bot's part of a created issue and nothing else: text a maintainer changed
+    /// above the marker in the meantime survives it.
+    /// </summary>
+    [Fact]
+    public void Replacing_the_boilerplate_keeps_the_text_above_the_marker_as_it_now_reads()
+    {
+        var created = IssueBodyComposer.ComposeIssueBody("The body.", "markus", "Acme HQ", [], []);
+        var editedSince = created.Replace("The body.", "The body, edited by a maintainer.");
+        var withContext = IssueBodyComposer.ComposeIssueBody(
+            "The body.", "markus", "Acme HQ", [], [], "### Relevant code\n- `src/a.cs`");
+
+        var body = IssueBodyComposer.ReplaceBoilerplate(editedSince, withContext);
+
+        Assert.NotNull(body);
+        Assert.StartsWith("The body, edited by a maintainer.", body);
+        Assert.Equal(1, CountMarkers(body));
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        Assert.Contains("### Relevant code", body[marker..]);
+        Assert.EndsWith("_Created by **markus** in Discord server **Acme HQ**._", body);
+    }
+
+    /// <summary>Without its marker the body is no longer the bot's to rewrite, so nothing is spliced.</summary>
+    [Fact]
+    public void A_body_whose_marker_was_removed_is_not_replaced()
+    {
+        var withContext = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], [], "### Relevant code");
+
+        Assert.Null(IssueBodyComposer.ReplaceBoilerplate("Rewritten from scratch by a maintainer.", withContext));
+    }
+
     [Fact]
     public void Comment_body_carries_images_and_the_also_reported_footer()
     {

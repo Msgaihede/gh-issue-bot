@@ -30,6 +30,11 @@ public interface IGitHubService
     Task<GitHubIssue> CreateIssueAsync(
         AppConfig app, string title, string body, IReadOnlyList<string> labels, CancellationToken ct = default);
 
+    Task<GitHubIssue> GetIssueAsync(AppConfig app, int issueNumber, CancellationToken ct = default);
+
+    /// <summary>Replaces an issue's body; its title, labels and state are left as they are.</summary>
+    Task UpdateIssueBodyAsync(AppConfig app, int issueNumber, string body, CancellationToken ct = default);
+
     /// <returns>The html_url of the created comment.</returns>
     Task<string> AddCommentAsync(AppConfig app, int issueNumber, string body, CancellationToken ct = default);
 
@@ -68,6 +73,18 @@ public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : I
             app, HttpMethod.Post, $"repos/{app.Repo}/issues",
             new CreateIssuePayload(title, body, labels.ToArray()), ct);
         return ToIssue(await ReadJsonAsync<IssueDto>(resp, ct));
+    }
+
+    public async Task<GitHubIssue> GetIssueAsync(AppConfig app, int issueNumber, CancellationToken ct = default)
+    {
+        using var resp = await SendAsync(app, HttpMethod.Get, $"repos/{app.Repo}/issues/{issueNumber}", payload: null, ct);
+        return ToIssue(await ReadJsonAsync<IssueDto>(resp, ct));
+    }
+
+    public async Task UpdateIssueBodyAsync(AppConfig app, int issueNumber, string body, CancellationToken ct = default)
+    {
+        using var resp = await SendAsync(
+            app, HttpMethod.Patch, $"repos/{app.Repo}/issues/{issueNumber}", new UpdateIssueBodyPayload(body), ct);
     }
 
     public async Task<string> AddCommentAsync(
@@ -203,6 +220,9 @@ public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : I
         [property: JsonPropertyName("title")] string Title,
         [property: JsonPropertyName("body")] string Body,
         [property: JsonPropertyName("labels")] string[] Labels);
+
+    private sealed record UpdateIssueBodyPayload(
+        [property: JsonPropertyName("body")] string Body);
 
     private sealed record CreateCommentPayload(
         [property: JsonPropertyName("body")] string Body);

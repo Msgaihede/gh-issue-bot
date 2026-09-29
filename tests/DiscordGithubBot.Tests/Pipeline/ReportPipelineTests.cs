@@ -23,6 +23,7 @@ public class ReportPipelineTests
     private readonly IImageUploader _uploader = Substitute.For<IImageUploader>();
     private readonly IAdditionalInfoExtractor _extractor = Substitute.For<IAdditionalInfoExtractor>();
     private readonly ICodeContextPrefetcher _codeContext = Substitute.For<ICodeContextPrefetcher>();
+    private readonly ICodeContextFollowUp _followUp = Substitute.For<ICodeContextFollowUp>();
     private readonly ReportPipeline _sut;
 
     private static readonly AppConfig App = new()
@@ -34,7 +35,7 @@ public class ReportPipelineTests
     public ReportPipelineTests()
     {
         _sut = new ReportPipeline(_classifier, _normalizer, _reviewer, _sync, _finder, _store, _gitHub, _uploader, _extractor,
-            _codeContext, new AiUsageMeter(), new BotOptions { Apps = [App] }, NullLogger<ReportPipeline>.Instance);
+            _codeContext, _followUp, new AiUsageMeter(), new BotOptions { Apps = [App] }, NullLogger<ReportPipeline>.Instance);
         _classifier.ClassifyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ReportType.Bug);
         _normalizer.NormalizeAsync(Arg.Any<ReportType>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -261,21 +262,79 @@ public class ReportPipelineTests
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>A reporter who read the preview for a while finds the code context done: it ships with the issue.</summary>
     [Fact]
-    public async Task CreateIssue_appends_the_prefetched_code_context()
+    public async Task A_ready_code_context_goes_into_the_issue_at_once()
     {
         var id = Guid.NewGuid();
         var report = Pending(id);
         _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(report);
-        _codeContext.GetAsync(report, App, Arg.Any<CancellationToken>()).Returns("### Relevant code\n- `src/a.cs`");
-        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
-            .Returns(new GitHubIssue(101, "T", "B", "open", DateTime.UtcNow, null, "https://gh/101"));
+        SetupReadyCodeContext(report, "### Relevant code\n- `src/a.cs`");
+        SetupCreatedIssue(101);
 
         await _sut.CreateIssueAsync(id);
 
         await _gitHub.Received(1).CreateIssueAsync(App, "T", Arg.Is<string>(b => b.Contains("### Relevant code")),
             Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+        await _followUp.DidNotReceiveWithAnyArgs().Start(default!, default!, default, default!);
     }
+
+    /// <summary>
+    /// A quick click does not wait for the code context: the issue is created without it, and the follow-up
+    /// edits it in once the build is done — composing the same body, screenshots and all, with the block added.
+    /// </summary>
+    [Fact]
+    public async Task A_code_context_still_being_built_is_edited_in_after_the_issue_is_created()
+    {
+        var id = Guid.NewGuid();
+        var report = Pending(id);
+        report.Attachments = [new PendingAttachment { FileName = "ok.png", ContentType = "image/png", Bytes = [1] }];
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(report);
+        _uploader.UploadAsync(App, "ok.png", "image/png", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(new UploadedImage("ok.png", "https://gh/ok"));
+        _codeContext.TryGetReady(report, out Arg.Any<string?>()).Returns(false);
+        SetupCreatedIssue(101);
+        Func<string, string>? compose = null;
+        await _followUp.Start(report, App, 101, Arg.Do<Func<string, string>>(f => compose = f));
+
+        var result = await _sut.CreateIssueAsync(id);
+
+        Assert.Equal(101, result.Number);
+        await _gitHub.Received(1).CreateIssueAsync(App, "T",
+            Arg.Is<string>(b => b.Contains("https://gh/ok") && !b.Contains("### Relevant code")),
+            Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+        await _codeContext.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
+
+        Assert.NotNull(compose);
+        var edited = compose("### Relevant code");
+        Assert.Contains("https://gh/ok", edited);
+        Assert.Contains("### Relevant code", edited);
+        Assert.Contains("_Created by **markus** in Discord server **Acme HQ**._", edited);
+    }
+
+    [Fact]
+    public async Task A_failed_creation_starts_no_follow_up()
+    {
+        var id = Guid.NewGuid();
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
+        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns<GitHubIssue>(_ => throw new HttpRequestException("502"));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => _sut.CreateIssueAsync(id));
+
+        await _followUp.DidNotReceiveWithAnyArgs().Start(default!, default!, default, default!);
+    }
+
+    private void SetupReadyCodeContext(PendingReport report, string? codeContext) =>
+        _codeContext.TryGetReady(report, out Arg.Any<string?>()).Returns(call =>
+        {
+            call[1] = codeContext;
+            return true;
+        });
+
+    private void SetupCreatedIssue(int number) =>
+        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubIssue(number, "T", "B", "open", DateTime.UtcNow, null, $"https://gh/{number}"));
 
     /// <summary>
     /// The code context is started once the draft is saved, so it is built while the reporter reads the

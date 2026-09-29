@@ -93,9 +93,11 @@ total AI spend, which is how the budget below is verified in production.
       code context — search terms → keyword + embedding shortlist → Jev picks
       (≤4 code files, ≤2 docs) → fetch them → Luna notes → saved on the draft
 "Create issue" click
-  ├─ upload screenshots (unchanged) ∥ take the saved code context (or await
-  │   the running build; build it now after a restart)
-  └─ create issue with the chosen labels; announce (unchanged)
+  ├─ upload screenshots (unchanged)
+  ├─ create issue with the chosen labels, with the code context if it is ready
+  ├─ answer the reporter, then announce
+  └─ not ready (decision 105): in the background, await the running build (or
+      build it after a restart) and edit the block into the issue body
 ```
 
 ### Titles
