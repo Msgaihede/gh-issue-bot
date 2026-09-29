@@ -5,87 +5,88 @@
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/)
 
 A Discord bot that turns short bug reports and feature requests into
-well-written, **deduplicated** GitHub issues — without the reporter ever
-needing a GitHub account.
+well-written, **deduplicated**, **labelled** GitHub issues that point at the
+relevant code — without the reporter ever needing a GitHub account.
 
-Members of your Discord server run a slash command, describe the problem, and
-attach screenshots. An LLM rewrites the report into a structured issue,
-semantic search checks it against the repository's existing issues, and the
-reporter confirms before anything touches GitHub: a new issue, or a comment on
-the matching one that carries only what the new report adds.
+Anyone runs `/issue`, describes the problem, and attaches screenshots. A
+decision model (TypeSafe's **Jev**) decides whether it is a bug or a feature,
+GPT-6 Luna writes the issue, Jev reads the repository's open issues to catch
+duplicates and picks the repository's own labels, and the reporter confirms
+before anything touches GitHub. Created issues list the source files and docs
+they are most likely about. Every model call goes through
+[OpenRouter](https://openrouter.ai/).
 
 ## Features
 
-- **Slash-command reporting** — `/report-issue` and `/request-feature` open a
-  modal with a description field and up to 10 screenshots; guilds with several
-  configured apps pick one from a dropdown in the same modal.
-- **AI normalization** — raw text becomes a structured draft (bug or feature
-  template), translated into English if needed. The model never invents facts
-  that were not in the report.
-- **Semantic duplicate detection** — reports are embedded
-  (`text-embedding-3-small`) and ranked against an incrementally synced copy of
-  the repo's issues by cosine similarity; an LLM verdict then decides between
-  *duplicate*, *uncertain* (reporter picks from candidates), and *no match*.
-- **Human in the loop** — nothing reaches GitHub without an explicit click.
-  Every interaction stays ephemeral until an issue is actually created.
-- **Smart duplicate comments** — confirming a duplicate posts a comment with
-  only what the new report adds (different repro steps, versions, error
-  messages), not a repeat of the issue.
-- **Regression flow** — a match on a recently closed issue asks "still
-  happening?" and files a new issue referencing the old one.
-- **Screenshots that survive** — Discord CDN links expire in ~24 h, so image
-  bytes are downloaded at submit time and uploaded to GitHub when the issue is
-  created (with a Contents-API fallback branch if the primary upload endpoint
-  refuses).
-- **Multi-app** — one bot instance serves any number of repositories, each
-  mapped to its own Discord guilds and announcement channels, each with its own
-  credentials.
-- **PAT or GitHub App auth** — per app; GitHub App credentials make issues
-  authored by `<app-name>[bot]` instead of a personal account.
+- **One command, user-installable** — `/issue` opens a modal (description +
+  up to 10 screenshots). The bot can be added to a server or to a user's own
+  Discord account (`/issue-install` hands out the link), so it works in any
+  server, DM or group chat.
+- **Jev decides** — bug vs feature, which of three drafted titles best
+  describes the issue, which of the repository's labels apply, which open
+  issue (if any) it duplicates, and which files it is about. Decisions come
+  back as probabilities that code gates on, not as parsed text.
+- **Duplicate detection that reads the issues** — every open issue's title and
+  opening go past Jev; the likeliest few are then compared with the report in
+  full. A clear match offers "add my report", a maybe asks the reporter.
+- **The repository's own labels** — every label that fits, minus triage labels
+  such as `duplicate` or `wontfix`.
+- **Code and docs context** — a background repository map (one summary per
+  source file and Markdown doc, refreshed incrementally) lets the bot name the
+  relevant files and explain how they relate — written into the GitHub issue
+  only, never shown in Discord.
+- **Cheap by design** — GPT-6 Luna on OpenAI's flex tier with automatic
+  fallback to the regular tier, Jev for everything that is a decision, code
+  context only for issues that are actually created: ≈ $0.004 per report,
+  so 1000 reports a month stay under $5 (see [APP.md](APP.md#cost)).
+- **Human in the loop** — nothing reaches GitHub without an explicit click;
+  every interaction stays ephemeral until an issue is created.
+- **Smart duplicate comments** — confirming a duplicate posts only what the new
+  report adds.
+- **Screenshots that survive** — image bytes are downloaded at submit time
+  (Discord CDN links expire) and uploaded to GitHub on creation.
+- **Multi-app, PAT or GitHub App auth** — one instance serves many
+  repositories, each with its own credentials and announcement channels.
 
 ## How a report becomes an issue
 
 ```mermaid
 flowchart TD
-    A["/report-issue modal:<br>description + screenshots"] --> B["Download image bytes immediately<br>(Discord CDN links expire ~24h)"]
-    B --> C["LLM normalizes the report<br>into a structured title + body"]
-    C --> D["Embed and rank against the repo's<br>issues by cosine similarity (top 5)"]
-    D --> E{LLM verdict}
-    E -->|"duplicate (open issue)"| F["Same issue — add my report /<br>Not it — show my draft"]
-    E -->|"duplicate (closed &lt; 30 days)"| G["Still happening? /<br>Looks fixed"]
-    E -->|uncertain| H["Candidate picker +<br>None of these — new issue"]
-    E -->|no match| I["Draft preview"]
-    F -->|confirm| J["Comment on the issue with<br>only what this report adds"]
-    G -->|still happening| I
-    H --> I
-    I -->|Create issue| K["New issue: screenshots, label,<br>reporter footer + public announcement"]
+    A["/issue modal:<br>description + screenshots"] --> B["Download image bytes immediately"]
+    B --> C["Jev: bug or feature?"]
+    C --> D["GPT-6 Luna: body + 3 candidate titles"]
+    D --> E["Jev: best title + repo labels"]
+    D --> F["Jev: shortlist open issues,<br>then compare in full"]
+    E --> G{Duplicate?}
+    F --> G
+    G -->|clear match| H["Same issue — add my report /<br>Not it — show my draft"]
+    G -->|maybe| I["Candidate picker +<br>None of these — new issue"]
+    G -->|no| J["Draft preview: type, labels, title, body"]
+    H -->|confirm| K["Comment with only what this report adds"]
+    I --> J
+    J -->|Create issue| L["Jev picks files from the repo map,<br>Luna writes code notes"]
+    L --> M["New issue: labels, screenshots, relevant code + docs,<br>reporter footer + public announcement"]
 ```
-
-Drafts wait in SQLite for one hour between the modal and the confirming click;
-the click claims the draft atomically, so a double-click can never file the
-same report twice.
 
 ## Slash commands
 
 | Command | What it does |
 | --- | --- |
-| `/report-issue` | Bug-report modal → deduplicated issue with the `bug` label |
-| `/request-feature` | Same flow with the feature template and the `enhancement` label |
+| `/issue` | Report a bug or request a feature → deduplicated, labelled issue |
+| `/issue-install` | Link to add the bot to your own Discord account |
 | `/issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
-
-When a guild maps to more than one configured app, the report modal asks which
-app via a dropdown; `/issues` instead takes an optional `app` option, only
-needed in that case.
 
 ## Getting started
 
 ### Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) (or Docker)
-- A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
-- An OpenAI API key (chat + embeddings)
+- A Discord application with a bot token, and **User Install** enabled under
+  *Installation* in the [Developer Portal](https://discord.com/developers/applications)
+- An [OpenRouter API key](https://openrouter.ai/keys) — put a monthly credit
+  limit on it; that is the hard cap on spend
 - GitHub credentials per repository: a personal access token **or** a GitHub
-  App installation (see below)
+  App installation
 
 ### Configure
 
@@ -96,11 +97,7 @@ sources win. The minimal shape:
 ```json
 {
   "Discord": { "Token": "<secret>" },
-  "OpenAI": {
-    "ApiKey": "<secret>",
-    "ChatModel": "gpt-5.6-luna",
-    "EmbeddingModel": "text-embedding-3-small"
-  },
+  "OpenRouter": { "ApiKey": "<secret>" },
   "Apps": [
     {
       "Name": "MyApp",
@@ -113,9 +110,10 @@ sources win. The minimal shape:
 }
 ```
 
-`.env.example` documents the environment-variable form of every knob.
-Configuration is validated at startup: any problem is printed as a
-`CONFIG ERROR: …` line and the bot exits before connecting to anything.
+Models default to `openai/gpt-6-luna` and `typesafe/jev-1.13`. `.env.example`
+documents the environment-variable form of every knob. Configuration is
+validated at startup: any problem is printed as a `CONFIG ERROR: …` line and
+the bot exits before connecting to anything.
 
 ### Run
 
@@ -123,9 +121,12 @@ Configuration is validated at startup: any problem is printed as a
 dotnet run --project src/DiscordGithubBot
 ```
 
-`appsettings.json` ships secret-free, so supply the Discord token, OpenAI key,
-and GitHub credentials via environment variables (the app does not read `.env`
-itself — export the values, or use a tool that loads `.env` files).
+To see what the models decide about a report without touching Discord or
+GitHub issues — the way to tune the decision thresholds:
+
+```sh
+dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "The save button does nothing after I rotate the phone"
+```
 
 ### Run with Docker
 
@@ -136,8 +137,7 @@ docker compose up --build
 The image runs as a non-root user and stores the SQLite database on the named
 `botdata` volume. Secrets come from a `.env` file, Docker secrets under
 `secrets/` (key-per-file, they override everything), or both — see
-[APP.md](APP.md#running-in-docker) for the details and one important caveat
-about `Database__Path`.
+[APP.md](APP.md#running-in-docker).
 
 Pushes to `main` publish the image to
 `ghcr.io/msgaihede/gh-issue-bot` (tags `latest` and `sha-<commit>`).
@@ -150,20 +150,12 @@ Each configured app authenticates with **exactly one** of:
   token's owner.
 - **`GitHubApp`** — an `AppId` + `InstallationId` + private key; issues are
   authored by `<app-name>[bot]`. The App needs **Issues: Read and write** and
-  **Contents: Read and write** (screenshot fallback), and nothing else.
+  **Contents: Read and write** (code reading for the repository map, and the
+  screenshot fallback branch).
 
 [APP.md](APP.md#github-credentials-pat-or-github-app) walks through creating
-the App and explains the one sharp edge (PEM private keys cannot be inlined
-into environment variables — use `PrivateKeyPath` or a Docker secret file).
-
-To verify screenshot uploads against a real repository without going through
-Discord:
-
-```sh
-dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo
-```
-
-It prints the auth mode in use and `SMOKE OK: <url>` on success.
+the App. `--smoke-upload owner/repo` verifies screenshot uploads against a real
+repository.
 
 ## Development
 
@@ -172,16 +164,15 @@ dotnet build   # build everything
 dotnet test    # run the XUnit suite
 ```
 
-Logic lives in testable services (`Pipeline`, `Ai`, `GitHub`, `Data`); the
-Discord layer stays thin. CI runs build + tests on every PR and push to
-`main`; the release workflow additionally builds and pushes the Docker image
-when tests pass.
+Logic lives in testable services (`Ai`, `CodeContext`, `OpenRouter`,
+`Pipeline`, `GitHub`, `Data`); the Discord layer stays thin.
 
 ## Documentation
 
-- [APP.md](APP.md) — full description of the app: workflow details,
-  configuration reference, Docker setup, manual verification checklist.
+- [APP.md](APP.md) — the full description: workflow, models and cost,
+  configuration, user install, Docker, manual verification.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — every non-obvious decision, dated
   and explained.
-- [Design document](docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md)
-  — the original design rationale.
+- [Redesign spec](docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md)
+  — OpenRouter, Jev, dedup, labels, code context and the budget.
+- [Original design](docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md).

@@ -1,7 +1,8 @@
 # Discord → GitHub Issue Bot — Design
 
 **Date:** 2026-08-18
-**Status:** Approved
+**Status:** Approved; the AI, dedup, command and closed-issue parts are
+superseded by `2026-09-29-openrouter-jev-redesign.md`.
 
 ## Overview
 

@@ -24,6 +24,8 @@ is unchanged.
    report never trawls the code base.
 7. **500–1000 issues/month for $5–10/month.**
 8. The issue **title must represent the actual issue.**
+9. Relevant **Markdown docs** are scanned too — repositories keep useful
+   context in `.md` files (added during implementation).
 
 Settled with the owner: `/issue` + `/issue-install` (Discord forbids a
 runnable `/issue` with subcommands); `/issues` stays. From a user install,
@@ -40,10 +42,10 @@ into the GitHub issue only, never shown in Discord.
 | Which repo labels apply | Jev `noul` per label | independent, several can co-occur |
 | Dedup stage 1: shortlist open issues | Jev `choice` over issues | reads every open issue's title + excerpt |
 | Dedup stage 2: same issue? | Jev `score` per shortlisted issue | reads full bodies; 3 levels map onto match / ask / drop |
-| Which files are relevant | Jev `choice` over the repo map | select from real paths; no hallucinated files |
+| Which code files and docs are relevant | Jev `choice` over the repo map, code and docs asked separately | select from real paths; no hallucinated files; a doc never displaces the file to fix |
 | Report → structured issue draft | GPT-6 Luna | generation |
-| One-line summary per source file (repo map) | GPT-6 Luna, background | generation |
-| Code notes for the chosen files | GPT-6 Luna | generation grounded in fetched code |
+| One-line summary per source file / doc (repo map) | GPT-6 Luna, background | generation |
+| Notes for the chosen files | GPT-6 Luna | generation grounded in fetched code and docs |
 | What a duplicate report adds | GPT-6 Luna | generation (unchanged behaviour) |
 
 Models are pinned in config: `openai/gpt-6-luna` and `typesafe/jev-1.13`
@@ -86,8 +88,8 @@ total AI spend, which is how the budget below is verified in production.
   └─ save pending report → Discord preview (type, labels, title, body)
 "Create issue" click
   ├─ upload screenshots (unchanged)
-  ├─ code context: Jev file selection over the repo map → fetch ≤4 files →
-  │   Luna notes (paths validated against the selection)
+  ├─ code context: Jev selection over the repo map (≤4 code files, ≤2 docs)
+  │   → fetch them → Luna notes (paths validated against the selection)
   └─ create issue with the chosen labels; announce (unchanged)
 ```
 
@@ -126,21 +128,30 @@ unchanged); incremental sync deletes rows that closed.
   failing → ask the reporter over the stage-1 shortlist.
 
 Thresholds are the Decisions skill's pre-probe defaults and are named
-constants; `--dry-run` prints the raw probabilities for tuning.
+constants. No API key was available during implementation, so none of them
+has been probed yet: `--dry-run owner/repo "text"` runs one report through
+every model call (plus the code context) without storing or posting it, and
+prints the decisions, the cost, and each decision's raw probabilities.
 
 ### Repository map + code context
-- **Map:** per app, a SQLite table of source files (`path`, blob SHA,
-  ≤25-word summary). A background worker checks the default branch's head
-  hourly; on a new commit it lists the tree, filters to source files
-  (extension allowlist, vendor/build directories out, ≤200 KB, cap 2000
-  files), and summarizes only new or changed blobs (batched, flex). The
-  commit watermark advances only once every file is summarized; each pass
-  summarizes at most 400 files so a first build spreads over a few hours.
-- **Selection:** Jev `choice` over the map (chunks of ≤150 files, same
-  shortlist helper as dedup), top 4 files with probability ≥ 0.05.
+- **Map:** per app, a SQLite table of source files and Markdown docs
+  (`path`, blob SHA, ≤25-word summary of what the file does or the doc
+  explains). A background worker checks the default branch's head hourly; on
+  a new commit it lists the tree, filters (code-extension allowlist plus
+  `.md`/`.mdx`/`.markdown`/`.rst`/`.adoc`; vendor/build/`.github` directories,
+  generated code, licences and codes of conduct out; ≤200 KB; cap 2000
+  files), and summarizes only new or changed blobs (batched, flex). The map
+  is marked complete only once every file is summarized; each pass
+  summarizes at most 400 files and the worker returns every 5 minutes while
+  a map is incomplete. A file the model refuses or skips is stored
+  unsummarized so no pass pays for it twice.
+- **Selection:** two Jev `choice` rounds over the map (chunks of ≤150 files,
+  same shortlist helper as dedup) — one over code, one over docs — keeping
+  the top 4 code files and top 2 docs with probability ≥ 0.05.
 - **Notes:** the chosen files' contents (≤12k chars each) plus the draft go
-  to Luna, which returns per-file relevance notes. Paths it names that were
-  not provided are dropped. The block is appended after the `MetaMarker`,
+  to Luna, which returns per-file relevance notes ("Relevant code", "Related
+  docs"). Paths it names that were not provided are dropped; if it fails, the
+  picks are listed with their map summaries. The block is appended after the `MetaMarker`,
   so it never feeds dedup, with blob links pinned to the mapped commit.
 - **Never in Discord:** generated at "Create issue" time and written only to
   GitHub, so a Discord reporter (any installer, now) cannot use the bot to

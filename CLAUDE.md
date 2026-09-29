@@ -20,6 +20,8 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
 - Build: `dotnet build`
 - Test: `dotnet test`
 - Run: `dotnet run --project src/DiscordGithubBot`
+- Dry run (one report through every model call, nothing stored or posted):
+  `dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "report text"`
 - Image-upload smoke test: `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`
   (`owner/repo` must be a configured app; prints the app's auth mode, then
   `SMOKE OK: <url>` or `SMOKE FAILED: …`)
@@ -51,7 +53,12 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   Discord's declared one — declared types come from the uploading client and are
   spoofable. SVG is deliberately excluded (scriptable XML, no magic number).
 - Everything after `IssueBodyComposer.MetaMarker` in an issue body is bot
-  boilerplate and is cut before dedup reads it.
+  boilerplate (footer, screenshots, code context) and is cut before dedup
+  reads it.
+- Code context is written to GitHub only — never render it in Discord (any
+  user can install the bot; private code must not leak).
+- Commands are global and user-installable: never rely on `Context.Guild`;
+  use `Context.Interaction.GuildId` and `BotOptions.AppsForContext`.
 - All interaction replies are ephemeral; only issue creations post publicly.
 - The report modal's "App" dropdown is not declared on ReportModal — its
   options are per-guild, so OpenModalAsync injects it via `modifyModal`, and
