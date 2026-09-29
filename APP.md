@@ -129,11 +129,29 @@ starts from the right place:
   without losing anything; the next check picks up where it stopped. Reports
   filed within 10 minutes of a push can still see the previous version of the
   files it changed.
-- **At "Create issue".** Jev picks up to four code files and, separately, up
-  to two docs from the map; the bot reads them at the exact version the map
-  summarized; GPT-6 Luna says which are really involved and how, naming
-  functions or documented behaviour, plus a short note on where a fix would
-  likely go. The result is appended to the issue under "Relevant code" and
+- **Embeddings.** Every summary (with its path) is also embedded with
+  `voyageai/voyage-4`, so files can be found by meaning, not only by shared
+  words. A changed summary gets a new vector; each check embeds whatever lacks
+  one — which is also how an existing map, or a switch of embedding model,
+  catches up (a 1,551-file map cost $0.0035 to embed).
+- **At "Create issue".** Reporters rarely use the code's vocabulary ("nothing
+  comes up" rather than `fts_query`), so finding the files is two-sided:
+  1. GPT-6 Luna writes the search terms a developer would use, looking at the
+     repository's file tree so the terms match the names this codebase uses;
+  2. keyword search (BM25 over path + summary) and embedding search each rank
+     the files, and the two rankings are fused; code and docs are ranked
+     apart, and the top 40 code files and top 10 docs go on;
+  3. Jev picks up to four code files and two docs from those candidates;
+  4. the bot reads them at the exact version the map summarized, and GPT-6
+     Luna says which are really involved and how, naming functions or
+     documented behaviour, plus a short note on where a fix would likely go.
+
+  Measured on mtg-grimoire's history (decision 95), this finds a file the fix
+  actually changed in the top 10 for 87% of user-worded reports, and Jev
+  choosing from the 40 candidates matched Jev reading the whole map while
+  using about 3% of the tokens. Without search terms the report text is
+  searched alone; without an issue embedding the keyword ranking stands
+  alone. The result is appended to the issue under "Relevant code" and
   "Related docs", each link pinned to the commit its file was read at (so it
   shows exactly the version the notes describe), and a line saying it is
   AI-generated.
@@ -191,7 +209,8 @@ lives in memory, so a restart resets it.
 | Model | Via | Used for |
 | --- | --- | --- |
 | `typesafe/jev-1.13` | OpenRouter Decisions API | type, title choice, labels, duplicate shortlist + verification, file and doc selection |
-| `openai/gpt-6-luna` | OpenRouter chat completions | the draft, repository-map summaries, code notes, duplicate comments |
+| `openai/gpt-6-luna` | OpenRouter chat completions | the draft, repository-map summaries, search terms, code notes, duplicate comments |
+| `voyageai/voyage-4` | OpenRouter embeddings | repository-map summaries and each new issue, for finding its files by meaning |
 
 **Flex first.** Chat calls send `provider.order = ["openai/flex", "openai"]`:
 OpenAI's half-price flex tier first, the regular tier behind it, and
@@ -217,16 +236,16 @@ per million input tokens with free output.
 | Luna: draft (reasoning low) | $0.0004 |
 | Jev: title + 40 labels | $0.0002 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
-| Code context (800-file map, 4 files read) — only for created issues | $0.0026 |
-| **Total** | **≈ $0.004** |
+| Code context — only for created issues: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
+| **Total** | **≈ $0.0035** |
 
-1000 reports a month come to about **$3.70** on flex, about $5.50 if every
-chat call fell back to the regular tier; keeping the repository map current
-adds cents (a first build of a 1000-file repository is about $0.15, after
-that only changed files are paid for). The first live dry runs came in well
-under the estimate for the draft itself: $0.00006–0.00008 per draft on flex,
-plus about 1,000 Jev input tokens for type and title (dedup and code context
-add more once a repository with open issues and a map is involved).
+1000 reports a month come to about **$3.50** on flex, about $5 if every chat
+call fell back to the regular tier, and code context no longer grows with the
+size of the repository. Keeping the repository map current adds cents (a
+first build of mtg-grimoire's 1,551 files was $0.19 of summaries plus $0.004
+of embeddings; after that only changed files are paid for). Measured on
+mtg-grimoire: a created issue used $0.0019 of GPT-6 Luna and 9,631 Jev input
+tokens (≈ $0.0004), where reading the whole map had cost 179k Jev tokens.
 
 The bot logs the AI usage of every drafted report, created issue and map
 refresh as `$<cost> in <n> call(s), <k> decision-model input tokens`.
@@ -283,7 +302,8 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
     "ChatRetryProviders": ["openai"],
     "ChatDeadlineSeconds": 30,
     "ReasoningEffort": "low",
-    "DecisionModel": "typesafe/jev-1.13"
+    "DecisionModel": "typesafe/jev-1.13",
+    "EmbeddingModel": "voyageai/voyage-4"
   },
   "Database": { "Path": "db/app.db" },
   "Limits": { "ReportsPerUserPerDay": 10 },
@@ -305,15 +325,16 @@ defaults when absent; a configured list replaces the default rather than
 extending it. `Database:Path` is relative to the working directory
 (`db/app.db` by default); the folder is created at startup if it does not
 exist. The database only holds caches and hour-long drafts: its schema is
-stamped, and a file written by a build with a different schema is rebuilt at
-startup rather than failing.
+stamped: a file from an older build is upgraded in place when the change is
+additive (new columns — the repository map survives), and rebuilt otherwise,
+rather than failing.
 
 `Apps` is a list, not a dictionary — `owner/repo` contains a `/`, which can't
 appear in an env-var name, so a list with a unique `Repo` field stays
 overridable. Startup fails fast — every problem printed as a
 `CONFIG ERROR: <key> …` line on stderr, exit code 1, before anything
-connects — if: the Discord token, OpenRouter key, chat model, decision model or
-database path is missing; the decision model is a `~` alias; the chat
+connects — if: the Discord token, OpenRouter key, chat, decision or embedding
+model, or database path is missing; the decision model is a `~` alias; the chat
 deadline is not positive or the report limit is negative; there are no apps;
 or any app has an empty name, a `Repo` that isn't `owner/repo`, a repo that
 another app already claims (case insensitive), no guild ids, no channel ids,

@@ -38,7 +38,7 @@ public sealed class DatabaseSchemaTests : IDisposable
     [Fact]
     public void A_new_database_is_created_and_stamped()
     {
-        using (var db = Context()) Assert.False(DatabaseSchema.EnsureCurrent(db));
+        using (var db = Context()) Assert.Equal(SchemaChange.None, DatabaseSchema.EnsureCurrent(db));
 
         Assert.Equal(DatabaseSchema.Version, UserVersion());
         using (var db = Context()) Assert.Empty(db.CachedIssues.ToList());
@@ -56,8 +56,39 @@ public sealed class DatabaseSchemaTests : IDisposable
 
         using (var db = Context())
         {
-            Assert.False(DatabaseSchema.EnsureCurrent(db));
+            Assert.Equal(SchemaChange.None, DatabaseSchema.EnsureCurrent(db));
             Assert.Equal("kept", db.CachedIssues.Single().Title);
+        }
+    }
+
+    /// <summary>
+    /// The repository map costs real money to build; an additive schema change must not throw it away. A file one
+    /// version behind gets the new columns and keeps every row.
+    /// </summary>
+    [Fact]
+    public void An_additive_upgrade_keeps_every_row()
+    {
+        using (var db = Context())
+        {
+            DatabaseSchema.EnsureCurrent(db);
+            db.RepoFiles.Add(new RepoFile { RepoKey = "o/r", Path = "src/a.cs", BlobSha = "b", Summary = "Kept." });
+            db.SaveChanges();
+        }
+
+        // Turn the file back into a version-5 database: no embedding columns, stamped 5.
+        Exec("ALTER TABLE RepoFiles DROP COLUMN Embedding; ALTER TABLE RepoFiles DROP COLUMN EmbeddingModel; PRAGMA user_version = 5;");
+
+        using (var db = Context()) Assert.Equal(SchemaChange.Upgraded, DatabaseSchema.EnsureCurrent(db));
+
+        Assert.Equal(DatabaseSchema.Version, UserVersion());
+        using (var db = Context())
+        {
+            var row = db.RepoFiles.Single();
+            Assert.Equal("Kept.", row.Summary);
+            Assert.Empty(row.Embedding);
+            row.Embedding = [1, 2, 3, 4];
+            row.EmbeddingModel = "m";
+            db.SaveChanges();
         }
     }
 
@@ -70,7 +101,7 @@ public sealed class DatabaseSchemaTests : IDisposable
     {
         Exec("CREATE TABLE IssueEmbeddings (Id INTEGER PRIMARY KEY, Vector BLOB);");
 
-        using (var db = Context()) Assert.True(DatabaseSchema.EnsureCurrent(db));
+        using (var db = Context()) Assert.Equal(SchemaChange.Rebuilt, DatabaseSchema.EnsureCurrent(db));
 
         Assert.Equal(DatabaseSchema.Version, UserVersion());
         using (var db = Context())

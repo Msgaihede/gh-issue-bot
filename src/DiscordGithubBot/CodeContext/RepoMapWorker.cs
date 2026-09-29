@@ -50,12 +50,12 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
             await using var scope = scopes.CreateAsyncScope();
             var result = await scope.ServiceProvider.GetRequiredService<IRepoMapService>().UpdateAsync(app, ct);
 
-            if (result.Summarized > 0 || result.Removed > 0 || !result.Complete)
+            if (result.Summarized > 0 || result.Removed > 0 || result.Embedded > 0 || !result.Complete)
             {
                 var usage = scope.ServiceProvider.GetRequiredService<AiUsageMeter>();
                 logger.LogInformation(
-                    "Repository map of {Repo}: {Summarized} file(s) summarized, {Removed} removed, {State}; AI usage {Usage}.",
-                    app.Repo, result.Summarized, result.Removed,
+                    "Repository map of {Repo}: {Summarized} file(s) summarized, {Embedded} embedded, {Removed} removed, {State}; AI usage {Usage}.",
+                    app.Repo, result.Summarized, result.Embedded, result.Removed,
                     result.Complete ? "up to date" : "incomplete, retrying at the next check", usage);
             }
         }

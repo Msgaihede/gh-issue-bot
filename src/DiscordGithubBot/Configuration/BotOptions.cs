@@ -47,6 +47,12 @@ public sealed class OpenRouterOptions
     /// <summary>Decision (System One) model for every judgment: type, title, labels, dedup, file selection.</summary>
     public string DecisionModel { get; set; } = "typesafe/jev-1.13";
 
+    /// <summary>
+    /// Embeds the repository map's summaries, and each issue, for finding an issue's files by meaning. Every
+    /// stored vector is stamped with this id; changing it re-embeds the map at the next check.
+    /// </summary>
+    public string EmbeddingModel { get; set; } = "voyageai/voyage-4";
+
     public IReadOnlyList<string> EffectiveChatProviders => ChatProviders ?? DefaultChatProviders;
 
     public IReadOnlyList<string> EffectiveChatRetryProviders => ChatRetryProviders ?? DefaultChatRetryProviders;
@@ -183,6 +189,7 @@ public sealed class BotOptions
         // in this bot was set against the probabilities of one particular build.
         else if (o.DecisionModel.TrimStart().StartsWith('~'))
             yield return $"OpenRouter:DecisionModel: '{o.DecisionModel}' is an alias; pin a model id such as typesafe/jev-1.13.";
+        if (string.IsNullOrWhiteSpace(o.EmbeddingModel)) yield return "OpenRouter:EmbeddingModel is required.";
         if (o.ChatDeadlineSeconds <= 0) yield return "OpenRouter:ChatDeadlineSeconds must be positive.";
     }
 

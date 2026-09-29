@@ -105,6 +105,15 @@ public class RepoFile
 
     /// <summary>What the file does, in at most ~25 words; "" for a file that could not be read as text.</summary>
     public string Summary { get; set; } = "";
+
+    /// <summary>
+    /// Embedding of <see cref="Path"/> and <see cref="Summary"/> as little-endian float32s (see
+    /// <c>VectorBytes</c>); empty until embedded, and cleared whenever the summary changes.
+    /// </summary>
+    public byte[] Embedding { get; set; } = [];
+
+    /// <summary>The model that produced <see cref="Embedding"/>; vectors of different models are not comparable.</summary>
+    public string EmbeddingModel { get; set; } = "";
 }
 
 /// <summary>How far a repository's map has caught up with its default branch.</summary>

@@ -45,7 +45,13 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   pre-probe defaults; tune them from `--dry-run` output, not by guessing.
 - The DB schema is stamped with `PRAGMA user_version`: bump
   `DatabaseSchema.Version` on ANY entity/column/index change, or existing
-  databases keep the old schema and the first query fails.
+  databases keep the old schema and the first query fails. For an additive
+  change also add the step to `DatabaseSchema.Upgrades` — otherwise the bump
+  rebuilds the file and throws away the (paid-for) repository map.
+- Repository-map vectors are stamped with `OpenRouter:EmbeddingModel`; only
+  vectors from the configured model are searched, and each check re-embeds
+  the rest. Code context never shows Jev the whole map — it ranks a
+  shortlist from keyword + embedding search (decision 95).
 - Discord attachment URLs expire ~24h — bytes are downloaded during the modal
   handler and persisted in SQLite (PendingAttachment).
 - Never hotlink Discord CDN URLs in GitHub issue bodies.

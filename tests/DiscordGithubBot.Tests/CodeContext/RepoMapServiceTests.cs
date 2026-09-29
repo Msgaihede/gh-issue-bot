@@ -35,7 +35,11 @@ public sealed class RepoMapServiceTests : IDisposable
         _conn.Dispose();
     }
 
-    private RepoMapService Sut(FakeChat chat) => new(_db, _gitHub, chat, NullLogger<RepoMapService>.Instance);
+    private readonly FakeEmbeddings _embeddings = new(t => [t.Length, 1f]);
+
+    private static readonly BotOptions Options = new();
+
+    private RepoMapService Sut(FakeChat chat) => new(_db, _gitHub, chat, _embeddings, Options, NullLogger<RepoMapService>.Instance);
 
     private void Head(string commit, params TreeFile[] files)
     {
@@ -69,7 +73,7 @@ public sealed class RepoMapServiceTests : IDisposable
         var seen = new List<ChatPrompt>();
         var chat = new EchoChat(seen);
 
-        var result = await new RepoMapService(_db, _gitHub, chat, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+        var result = await new RepoMapService(_db, _gitHub, chat, _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
 
         Assert.True(result.Complete);
         Assert.Equal(2, result.Summarized);
@@ -92,7 +96,7 @@ public sealed class RepoMapServiceTests : IDisposable
     {
         Head("c1", File("src/a.cs", "s1"));
         var seen = new List<ChatPrompt>();
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance);
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance);
         await sut.RefreshAsync(App);
 
         var result = await sut.RefreshAsync(App);
@@ -107,7 +111,7 @@ public sealed class RepoMapServiceTests : IDisposable
     public async Task A_new_commit_resummarizes_only_changed_files_and_drops_deleted_ones()
     {
         var seen = new List<ChatPrompt>();
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance);
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance);
         Head("c1", File("src/a.cs", "a1"), File("src/b.cs", "b1"), File("src/c.cs", "c1"));
         await sut.RefreshAsync(App);
 
@@ -132,7 +136,7 @@ public sealed class RepoMapServiceTests : IDisposable
         _gitHub.GetBlobTextAsync(App, "bin", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns((string?)null);
         var seen = new List<ChatPrompt>();
 
-        var result = await new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance)
+        var result = await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance)
             .RefreshAsync(App);
 
         Assert.True(result.Complete);
@@ -212,7 +216,7 @@ public sealed class RepoMapServiceTests : IDisposable
         var files = Enumerable.Range(0, RepoMapService.MaxSummariesPerRefresh + 10)
             .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
         Head("c1", files);
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), NullLogger<RepoMapService>.Instance);
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
 
         var first = await sut.RefreshAsync(App);
         var second = await sut.RefreshAsync(App);
@@ -231,7 +235,7 @@ public sealed class RepoMapServiceTests : IDisposable
             .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
         Head("c1", files);
 
-        var result = await new RepoMapService(_db, _gitHub, new EchoChat([]), NullLogger<RepoMapService>.Instance)
+        var result = await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance)
             .UpdateAsync(App);
 
         Assert.True(result.Complete);
@@ -244,7 +248,7 @@ public sealed class RepoMapServiceTests : IDisposable
     public async Task A_later_update_summarizes_only_what_was_added_or_changed()
     {
         var seen = new List<ChatPrompt>();
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance);
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance);
         Head("c1", File("src/a.cs", "a1"), File("src/b.cs", "b1"));
         await sut.UpdateAsync(App);
 
@@ -272,7 +276,7 @@ public sealed class RepoMapServiceTests : IDisposable
     public async Task An_update_with_nothing_changed_is_up_to_date()
     {
         Head("c1", File("src/a.cs", "s1"));
-        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), NullLogger<RepoMapService>.Instance);
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
         await sut.UpdateAsync(App);
 
         var result = await sut.UpdateAsync(App);
@@ -283,6 +287,84 @@ public sealed class RepoMapServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Summaries_are_embedded_and_stamped_with_the_model()
+    {
+        Head("c1", File("src/a.cs", "s1"), File("docs/b.md", "s2"));
+
+        var result = await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance)
+            .UpdateAsync(App);
+
+        Assert.Equal(2, result.Embedded);
+        var a = Rows()["src/a.cs"];
+        Assert.Equal(Options.OpenRouter.EmbeddingModel, a.EmbeddingModel);
+        Assert.Equal(RepoMapService.SearchText(a).Length, DiscordGithubBot.CodeContext.Retrieval.VectorBytes.To(a.Embedding)[0]);
+        Assert.Equal("src/a.cs\nAbout src/a.cs", _embeddings.Calls.Single().Inputs.Single(i => i.StartsWith("src/")));
+    }
+
+    /// <summary>A vector describes the summary it was made from: a changed file gets a new one, others keep theirs.</summary>
+    [Fact]
+    public async Task Only_changed_summaries_are_embedded_again()
+    {
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
+        Head("c1", File("src/a.cs", "a1"), File("src/b.cs", "b1"));
+        await sut.UpdateAsync(App);
+
+        Head("c2", File("src/a.cs", "a1"), File("src/b.cs", "b2"));
+        var result = await sut.UpdateAsync(App);
+
+        // The echo model writes the same summary for a changed blob, so nothing needed a new vector.
+        Assert.Equal(0, result.Embedded);
+        Assert.Single(_embeddings.Calls);
+    }
+
+    [Fact]
+    public async Task A_new_summary_clears_the_old_vector_and_gets_a_new_one()
+    {
+        Head("c1", File("src/a.cs", "a1"));
+        await Sut(new FakeChat("""{"files":[{"path":"src/a.cs","summary":"Old."}]}""")).UpdateAsync(App);
+
+        Head("c2", File("src/a.cs", "a2"));
+        var result = await Sut(new FakeChat("""{"files":[{"path":"src/a.cs","summary":"New and longer."}]}""")).UpdateAsync(App);
+
+        Assert.Equal(1, result.Embedded);
+        Assert.Equal("src/a.cs\nNew and longer.".Length,
+            DiscordGithubBot.CodeContext.Retrieval.VectorBytes.To(Rows()["src/a.cs"].Embedding)[0]);
+    }
+
+    /// <summary>A map built before embeddings existed — or under another model — is embedded at the next check.</summary>
+    [Fact]
+    public async Task An_up_to_date_map_still_gets_its_missing_vectors()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        _embeddings.Fail = true;
+        var sut = Sut(new FakeChat("""{"files":[{"path":"src/a.cs","summary":"Checkout."}]}"""));
+        var first = await sut.UpdateAsync(App);
+        _embeddings.Fail = false;
+
+        var second = await sut.UpdateAsync(App);
+
+        Assert.True(first.Complete);
+        Assert.Equal(0, first.Embedded);
+        Assert.True(second.UpToDate);
+        Assert.Equal(1, second.Embedded);
+        Assert.Equal(Options.OpenRouter.EmbeddingModel, Rows()["src/a.cs"].EmbeddingModel);
+    }
+
+    [Fact]
+    public async Task Switching_the_embedding_model_re_embeds_the_map()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        await Sut(new FakeChat("""{"files":[{"path":"src/a.cs","summary":"Checkout."}]}""")).UpdateAsync(App);
+
+        var switched = new BotOptions { OpenRouter = { EmbeddingModel = "other/model" } };
+        var result = await new RepoMapService(_db, _gitHub, new FakeChat("{}"), _embeddings, switched, NullLogger<RepoMapService>.Instance)
+            .UpdateAsync(App);
+
+        Assert.Equal(1, result.Embedded);
+        Assert.Equal("other/model", Rows()["src/a.cs"].EmbeddingModel);
+    }
+
+    [Fact]
     public async Task Summaries_are_batched()
     {
         var files = Enumerable.Range(0, RepoMapService.MaxFilesPerBatch + 1)
@@ -290,7 +372,7 @@ public sealed class RepoMapServiceTests : IDisposable
         Head("c1", files);
         var seen = new List<ChatPrompt>();
 
-        await new RepoMapService(_db, _gitHub, new EchoChat(seen), NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
 
         Assert.Equal(2, seen.Count);
     }

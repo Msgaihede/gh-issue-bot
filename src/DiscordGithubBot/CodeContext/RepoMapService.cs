@@ -1,4 +1,5 @@
 using System.Text;
+using DiscordGithubBot.CodeContext.Retrieval;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
@@ -12,7 +13,8 @@ namespace DiscordGithubBot.CodeContext;
 /// <param name="Complete">every source file at the head is summarized</param>
 /// <param name="Summarized">files summarized (or marked unreadable)</param>
 /// <param name="Removed">files dropped because they left the branch or the filter</param>
-public sealed record RepoMapRefresh(bool UpToDate, bool Complete, int Summarized, int Removed);
+/// <param name="Embedded">summaries embedded (new, changed, or left by an earlier embedding model)</param>
+public sealed record RepoMapRefresh(bool UpToDate, bool Complete, int Summarized, int Removed, int Embedded = 0);
 
 public interface IRepoMapService
 {
@@ -47,10 +49,20 @@ public interface IRepoMapService
 /// OpenRouter refuses outright (a bad key, exhausted credits, an unknown model), simply ends the pass and
 /// the next one resumes where it stopped: those say nothing about the files, and parking them would blank
 /// the map exactly when the operator's credit limit — the intended hard cap — is reached.
+/// <para>
+/// Every summary is also embedded (path + summary, the text the retrieval spike measured), so an issue's files
+/// can be found by meaning as well as by keyword. A changed summary clears its vector; every check then embeds
+/// whatever summaries lack a vector from the configured model — which also fills in maps built before
+/// embeddings existed, and re-embeds a map whose embedding model was switched. An embedding failure never
+/// fails a check: keyword search covers those files until the next one.
+/// </para>
 /// </remarks>
 public sealed class RepoMapService(
-    BotDbContext db, IGitHubService gitHub, IOpenRouterChat chat, ILogger<RepoMapService> logger) : IRepoMapService
+    BotDbContext db, IGitHubService gitHub, IOpenRouterChat chat, IEmbeddingModel embeddings, BotOptions options,
+    ILogger<RepoMapService> logger) : IRepoMapService
 {
+    /// <summary>Vectors saved per round of the embedding pass, so a failure late in a large map keeps the rest.</summary>
+    private const int EmbeddingSaveBatch = 480;
     /// <summary>Most files in one map; the shallowest paths win when a repository has more.</summary>
     internal const int MaxFiles = 2000;
 
@@ -95,7 +107,7 @@ public sealed class RepoMapService(
             var result = await RefreshAsync(app, ct);
             total = new RepoMapRefresh(
                 total.UpToDate && result.UpToDate, result.Complete,
-                total.Summarized + result.Summarized, total.Removed + result.Removed);
+                total.Summarized + result.Summarized, total.Removed + result.Removed, total.Embedded + result.Embedded);
 
             // No progress means a failure the pass already logged; going again now would repeat it.
             if (result.Complete || result.Summarized == 0) break;
@@ -113,7 +125,7 @@ public sealed class RepoMapService(
             var head = await gitHub.GetDefaultBranchHeadAsync(app, ct);
             var state = await db.RepoMapStates.FindAsync([repoKey], ct);
             if (state is { IsComplete: true } && state.CommitSha == head.CommitSha)
-                return new RepoMapRefresh(UpToDate: true, Complete: true, 0, 0);
+                return new RepoMapRefresh(UpToDate: true, Complete: true, 0, 0, await EmbedMissingAsync(app, repoKey, ct));
 
             var tree = await gitHub.GetTreeAsync(app, head.TreeSha, ct);
             if (tree.Truncated)
@@ -142,7 +154,8 @@ public sealed class RepoMapService(
             state.IsComplete = summarized == stale.Count;
             await db.SaveChangesAsync(ct);
 
-            return new RepoMapRefresh(UpToDate: false, state.IsComplete, summarized, gone.Count);
+            var embedded = await EmbedMissingAsync(app, repoKey, ct);
+            return new RepoMapRefresh(UpToDate: false, state.IsComplete, summarized, gone.Count, embedded);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -266,7 +279,55 @@ public sealed class RepoMapService(
 
         row.BlobSha = file.BlobSha;
         row.CommitSha = commitSha;
+
+        // A vector describes the summary it was made from; a new summary needs a new vector.
+        if (row.Summary != summary)
+        {
+            row.Embedding = [];
+            row.EmbeddingModel = "";
+        }
         row.Summary = summary;
+    }
+
+    /// <summary>The text a file is embedded and searched by — the same text for both retrievers.</summary>
+    public static string SearchText(RepoFile file) => file.Path + "\n" + file.Summary;
+
+    /// <returns>how many summaries were embedded; 0 when there was nothing to do or the embedding call failed.</returns>
+    private async Task<int> EmbedMissingAsync(AppConfig app, string repoKey, CancellationToken ct)
+    {
+        var model = options.OpenRouter.EmbeddingModel;
+        var missing = await db.RepoFiles
+            .Where(f => f.RepoKey == repoKey && f.Summary != "" && f.EmbeddingModel != model)
+            .OrderBy(f => f.Path)
+            .ToListAsync(ct);
+
+        var embedded = 0;
+        try
+        {
+            foreach (var batch in missing.Chunk(EmbeddingSaveBatch))
+            {
+                var vectors = await embeddings.EmbedAsync(model, batch.Select(SearchText).ToList(), ct);
+                for (var i = 0; i < batch.Length; i++)
+                {
+                    batch[i].Embedding = VectorBytes.From(vectors[i]);
+                    batch[i].EmbeddingModel = model;
+                }
+
+                await db.SaveChangesAsync(ct);
+                embedded += batch.Length;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Embedding {Count} summaries of {Repo} failed; keyword search covers them until the next check.",
+                missing.Count - embedded, app.Repo);
+        }
+
+        return embedded;
     }
 
     private static string Clean(string summary)

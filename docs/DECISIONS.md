@@ -1396,3 +1396,28 @@ below record the choices inside it that are not obvious from the code.
     (`TextTokens`, `KeywordIndex`, `VectorIndex`, `RankFusion`,
     `EmbeddingClient`, `QueryExpander`) are in the bot but not yet wired into
     `CodeContextBuilder`.
+
+96. **Code context retrieves a shortlist by keywords and embeddings, then
+    lets Jev pick; schema changes can now upgrade in place.** Following the
+    spike (decision 95) and the owner's go-ahead: at "Create issue", GPT-6
+    Luna writes developer search terms with the repository's file tree in
+    view; BM25 over path + summary and cosine similarity over
+    `voyageai/voyage-4` embeddings of the same text each rank the map, fused
+    by reciprocal rank, code and docs apart; Jev picks 4 code files from the
+    top 40 and 2 docs from the top 10. voyage-4 rather than voyage-4-lite:
+    they tied on code, voyage-4 led slightly on docs, and the price
+    difference is a fraction of a cent a month. The tree-grounded search
+    terms stay even though embeddings alone were nearly as good on code,
+    because they carried docs (keyword hit@5 35% → 51%) and cost about
+    $0.0008 an issue. Map rows gain an embedding and its model stamp; a new
+    summary clears the vector, and every check embeds whatever lacks one from
+    the configured model, so existing maps and model switches catch up on
+    their own; an embedding failure never fails a check. Degradation: no
+    search terms → the report text alone; no issue embedding → keywords
+    alone. Live on mtg-grimoire the first check embedded all 1,551 summaries
+    for $0.0035, and a created issue took 9,631 Jev tokens instead of 179k —
+    and found the query parser the whole-map run had missed. To keep that
+    map across this very change, `DatabaseSchema` now applies additive
+    upgrade steps (here: two `ALTER TABLE ... ADD COLUMN`) when every version
+    in between has one, and only rebuilds otherwise; decision 82's
+    rebuild-on-mismatch remains the fallback.

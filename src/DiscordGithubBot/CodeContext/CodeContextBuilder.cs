@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
 using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext.Retrieval;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
@@ -21,23 +22,42 @@ public interface ICodeContextBuilder
 }
 
 /// <summary>
-/// Enriches a new issue with the code and documentation it is about, in three steps. The decision model
-/// picks candidate files from the repository map — code and docs in separate selections, so a wordy doc
-/// never pushes the file that needs fixing out of the list — which only ever yields paths that exist. The
-/// chosen files are fetched at the exact blob the map summarized. The chat model then reads them next to
-/// the draft and says which are really involved and how. Paths it names that it was not given are dropped.
+/// Enriches a new issue with the code and documentation it is about, in four steps.
+/// <list type="number">
+/// <item><b>Retrieve.</b> The chat model writes the search terms a developer would use for the issue, looking
+/// at the repository's file tree — reporters rarely use the code's vocabulary. Keyword search (BM25) and
+/// embedding search over the map's path + summary texts each rank the files; the two rankings are fused, and
+/// the top <see cref="CodeCandidates"/> code files and <see cref="DocCandidates"/> docs go on. Code and docs are
+/// ranked apart, so a wordy doc never pushes the file that needs fixing out of the list.</item>
+/// <item><b>Pick.</b> The decision model chooses from those candidates — never from the whole map, which cost
+/// thirty times the tokens for the same accuracy (decision 95) — so it only ever yields paths that exist.</item>
+/// <item><b>Read.</b> The chosen files are fetched at the exact blob the map summarized.</item>
+/// <item><b>Explain.</b> The chat model reads them next to the draft and says which are really involved and
+/// how. Paths it names that it was not given are dropped.</item>
+/// </list>
 /// </summary>
 /// <remarks>
 /// The result is written into the GitHub issue only, never shown in Discord: whoever can run the bot is
 /// not necessarily someone who may read a private repository's code. Every failure degrades rather than
-/// blocks the issue — when the notes cannot be written the picked files are listed with their map
+/// blocks the issue — without search terms the issue text is searched alone, without an issue embedding the
+/// keyword ranking stands alone, when the notes cannot be written the picked files are listed with their map
 /// summaries, and when even the selection fails the issue is simply filed without this block.
 /// </remarks>
 public sealed class CodeContextBuilder(
     BotDbContext db, IDecisionModel decisions, IOpenRouterChat chat, IGitHubService gitHub,
+    IQueryExpander expander, IEmbeddingModel embeddings, BotOptions options,
     ILogger<CodeContextBuilder> logger) : ICodeContextBuilder
 {
-    /// <summary>~70 tokens per mapped file (path, summary, option), so a chunk stays near a third of Jev's context.</summary>
+    /// <summary>
+    /// Code files handed to the decision model. On mtg-grimoire the fused ranking had a changed file in its top
+    /// 40 for 95% of user-worded reports, and picking from 40 matched picking from the whole map.
+    /// </summary>
+    internal const int CodeCandidates = 40;
+
+    /// <summary>Docs handed to the decision model; docs are fewer, and it keeps only two of them.</summary>
+    internal const int DocCandidates = 10;
+
+    /// <summary>Candidates per decision request; above the candidate counts, so a pick is a single request.</summary>
     internal const int SelectionChunkSize = 150;
 
     /// <summary>A file the model gives any real chance is worth reading; the chat model makes the final call.</summary>
@@ -96,8 +116,14 @@ public sealed class CodeContextBuilder(
                 ["body"] = draft.Body.Length <= MaxIssueBodyChars ? draft.Body : draft.Body[..MaxIssueBodyChars],
             };
 
-            var selectingCode = SelectAsync(issue, mapped, MapFileKind.Code, MaxCodeFiles, ct);
-            var selectingDocs = SelectAsync(issue, mapped, MapFileKind.Doc, MaxDocs, ct);
+            var terms = await expander.ExpandAsync(draft, QueryExpander.FileTree(mapped.Select(f => f.Path)), ct);
+            var query = $"{draft.Title}\n{draft.Body}" + (terms.Count > 0 ? "\nSearch terms: " + string.Join(", ", terms) : "");
+            var queryVector = await EmbedQuietlyAsync(app, query, ct);
+
+            var selectingCode = SelectAsync(issue, Candidates(mapped, MapFileKind.Code, query, queryVector, CodeCandidates),
+                MapFileKind.Code, MaxCodeFiles, ct);
+            var selectingDocs = SelectAsync(issue, Candidates(mapped, MapFileKind.Doc, query, queryVector, DocCandidates),
+                MapFileKind.Doc, MaxDocs, ct);
             await Task.WhenAll(selectingCode, selectingDocs);
 
             var chosen = (await selectingCode).Concat(await selectingDocs).ToList();
@@ -124,10 +150,54 @@ public sealed class CodeContextBuilder(
         }
     }
 
-    private async Task<IReadOnlyList<RepoFile>> SelectAsync(
-        JsonObject issue, IReadOnlyList<RepoFile> mapped, MapFileKind kind, int take, CancellationToken ct)
+    /// <summary>
+    /// The files of one kind worth showing the decision model: keyword and embedding rankings fused by rank.
+    /// Files without a vector from the configured model are still reachable through their keywords.
+    /// </summary>
+    private IReadOnlyList<RepoFile> Candidates(
+        IReadOnlyList<RepoFile> mapped, MapFileKind kind, string query, float[]? queryVector, int take)
     {
         var files = mapped.Where(f => SourceFileFilter.KindOf(f.Path) == kind).ToList();
+        if (files.Count == 0) return [];
+
+        var keyword = new KeywordIndex(files.Select(f => new IndexedText(f.Path, RepoMapService.SearchText(f))))
+            .Search(query, take);
+
+        IReadOnlyList<SearchHit> semantic = [];
+        if (queryVector is not null)
+        {
+            var model = options.OpenRouter.EmbeddingModel;
+            semantic = new VectorIndex(files
+                    .Where(f => f.EmbeddingModel == model && f.Embedding.Length > 0)
+                    .Select(f => (f.Path, VectorBytes.To(f.Embedding))))
+                .Search(queryVector, take);
+        }
+
+        var byPath = files.ToDictionary(f => f.Path, StringComparer.Ordinal);
+        return RankFusion.Fuse(take, keyword, semantic).Select(h => byPath[h.Key]).ToList();
+    }
+
+    /// <summary>The issue's embedding, or null when it cannot be had — keyword ranking then stands alone.</summary>
+    private async Task<float[]?> EmbedQuietlyAsync(AppConfig app, string query, CancellationToken ct)
+    {
+        try
+        {
+            return (await embeddings.EmbedAsync(options.OpenRouter.EmbeddingModel, [query], ct))[0];
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Embedding an issue for {Repo} failed; finding its files by keyword alone.", app.Repo);
+            return null;
+        }
+    }
+
+    private async Task<IReadOnlyList<RepoFile>> SelectAsync(
+        JsonObject issue, IReadOnlyList<RepoFile> files, MapFileKind kind, int take, CancellationToken ct)
+    {
         if (files.Count == 0) return [];
 
         var byKey = files.ToDictionary(Key);

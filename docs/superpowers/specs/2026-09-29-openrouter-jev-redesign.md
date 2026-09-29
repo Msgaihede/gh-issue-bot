@@ -42,7 +42,7 @@ into the GitHub issue only, never shown in Discord.
 | Which repo labels apply | Jev `noul` per label | independent, several can co-occur |
 | Dedup stage 1: shortlist open issues | Jev `choice` over issues | reads every open issue's title + excerpt |
 | Dedup stage 2: same issue? | Jev `score` per shortlisted issue | reads full bodies; 3 levels map onto match / ask / drop |
-| Which code files and docs are relevant | Jev `choice` over the repo map, code and docs asked separately | select from real paths; no hallucinated files; a doc never displaces the file to fix |
+| Which code files and docs are relevant | Jev `choice` over a 40-file (code) / 10-file (docs) shortlist from keyword + embedding search | select from real paths; no hallucinated files; a doc never displaces the file to fix |
 | Report → structured issue draft | GPT-6 Luna | generation |
 | One-line summary per source file / doc (repo map) | GPT-6 Luna, background | generation |
 | Notes for the chosen files | GPT-6 Luna | generation grounded in fetched code and docs |
@@ -146,9 +146,13 @@ prints the decisions, the cost, and each decision's raw probabilities.
   startup check is the full first build, and stops early only when a pass
   makes no progress. A file the model refuses or skips is stored
   unsummarized so no pass pays for it twice.
-- **Selection:** two Jev `choice` rounds over the map (chunks of ≤150 files,
-  same shortlist helper as dedup) — one over code, one over docs — keeping
-  the top 4 code files and top 2 docs with probability ≥ 0.05.
+- **Retrieval** (decision 95/96): Luna writes developer search terms for the
+  issue with the file tree in view; BM25 over path + summary and cosine over
+  `voyageai/voyage-4` embeddings of path + summary each rank the files, fused
+  by reciprocal rank; code and docs apart, top 40 code / top 10 docs.
+- **Selection:** a Jev `choice` over each candidate list (same shortlist
+  helper as dedup), keeping the top 4 code files and top 2 docs with
+  probability ≥ 0.05.
 - **Notes:** the chosen files' contents (≤12k chars each) plus the draft go
   to Luna, which returns per-file relevance notes ("Relevant code", "Related
   docs"). Paths it names that were not provided are dropped; if it fails, the
@@ -185,10 +189,14 @@ $0.25/M out (regular 2×); Jev 1.13 $0.042/M in, output free.
 | Luna draft (reasoning low) | 2k in / 1.2k out | $0.0004 |
 | Jev review (40 labels) | 4k in | $0.00017 |
 | Jev dedup (200 open issues) | 28k in | $0.0012 |
-| Code context (800-file map + 4 files), 70% of reports | 40k Jev + 13k/1k Luna | $0.0026 |
-| **Per report** | | **≈ $0.0037** |
+| Code context (search terms, embedding, Jev over 50 candidates, notes), 70% of reports | ~6k Jev + ~26k/0.7k Luna | $0.0020 |
+| **Per report** | | **≈ $0.0035** |
 
-1000 reports ≈ **$3.7/month on flex**, ≈ $5.5 if every call fell back to
+Originally estimated with Jev reading the whole map (≈ $0.0037 for an
+800-file map, growing with repo size); live, that cost 179k Jev tokens on a
+1,551-file repo, which is what decisions 95–96 replaced.
+
+1000 reports ≈ **$3.5/month on flex**, ≈ $5 if every call fell back to
 the regular tier; repo-map upkeep adds cents (a 1000-file first build is
 ≈ $0.15, afterwards only changed files). The hard cap belongs on the
 OpenRouter key's credit limit; the per-user limit stops one account from

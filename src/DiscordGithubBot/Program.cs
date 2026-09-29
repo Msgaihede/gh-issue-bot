@@ -64,8 +64,15 @@ using var host = builder.Build();
 // The bot ships no migrations: it owns its SQLite file, and a schema from another build is rebuilt.
 using (var scope = host.Services.CreateScope())
 {
-    if (DatabaseSchema.EnsureCurrent(scope.ServiceProvider.GetRequiredService<BotDbContext>()))
-        Console.WriteLine($"Database schema was out of date; rebuilt it at version {DatabaseSchema.Version}.");
+    switch (DatabaseSchema.EnsureCurrent(scope.ServiceProvider.GetRequiredService<BotDbContext>()))
+    {
+        case SchemaChange.Upgraded:
+            Console.WriteLine($"Database schema upgraded to version {DatabaseSchema.Version}; all data kept.");
+            break;
+        case SchemaChange.Rebuilt:
+            Console.WriteLine($"Database schema was out of date; rebuilt it at version {DatabaseSchema.Version}.");
+            break;
+    }
 }
 
 // one-shot smoke test for the unofficial upload endpoint: dotnet run -- --smoke-upload owner/repo
@@ -100,9 +107,9 @@ if (args is ["--dry-run", var dryRepo, var reportText])
     await using (var mapScope = host.Services.CreateAsyncScope())
     {
         var map = await mapScope.ServiceProvider.GetRequiredService<IRepoMapService>().UpdateAsync(app);
-        Console.WriteLine(map.UpToDate
+        Console.WriteLine(map.UpToDate && map.Embedded == 0
             ? "Repository map: up to date."
-            : $"Repository map: {map.Summarized} file(s) summarized ({mapScope.ServiceProvider.GetRequiredService<AiUsageMeter>()}); " +
+            : $"Repository map: {map.Summarized} file(s) summarized, {map.Embedded} embedded ({mapScope.ServiceProvider.GetRequiredService<AiUsageMeter>()}); " +
               (map.Complete ? "complete." : "incomplete after a failure (see the warning above), so code context may be thin."));
     }
 

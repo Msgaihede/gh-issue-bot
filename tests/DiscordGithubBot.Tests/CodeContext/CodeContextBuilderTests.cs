@@ -1,5 +1,6 @@
 using DiscordGithubBot.Ai;
 using DiscordGithubBot.CodeContext;
+using DiscordGithubBot.CodeContext.Retrieval;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
@@ -17,6 +18,9 @@ public sealed class CodeContextBuilderTests : IDisposable
     private readonly SqliteConnection _conn = new("DataSource=:memory:");
     private readonly BotDbContext _db;
     private readonly IGitHubService _gitHub = Substitute.For<IGitHubService>();
+    private readonly IQueryExpander _expander = Substitute.For<IQueryExpander>();
+    private readonly FakeEmbeddings _embeddings = new();
+    private static readonly BotOptions Options = new();
 
     private static readonly AppConfig App = new() { Name = "MyApp", Repo = "Owner/Repo", GitHubToken = "p" };
     private static readonly IssueDraft Draft = new("Checkout goes blank after tapping Pay", "Tapping Pay shows a blank page.");
@@ -29,6 +33,8 @@ public sealed class CodeContextBuilderTests : IDisposable
         _db.Database.EnsureCreated();
         _gitHub.GetBlobTextAsync(App, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(call => $"contents of {call.ArgAt<string>(1)}");
+        _expander.ExpandAsync(Arg.Any<IssueDraft>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<string>());
     }
 
     public void Dispose()
@@ -44,6 +50,8 @@ public sealed class CodeContextBuilderTests : IDisposable
             _db.RepoFiles.Add(new RepoFile
             {
                 RepoKey = "owner/repo", Path = path, BlobSha = "blob-" + path, CommitSha = Commit, Summary = summary,
+                // Every file equally similar to every issue, so the embedding side offers them all.
+                Embedding = VectorBytes.From([1f, 0f]), EmbeddingModel = Options.OpenRouter.EmbeddingModel,
             });
         _db.SaveChanges();
     }
@@ -51,7 +59,7 @@ public sealed class CodeContextBuilderTests : IDisposable
     private int IdOf(string path) => _db.RepoFiles.Single(f => f.Path == path).Id;
 
     private CodeContextBuilder Sut(FakeDecisions decisions, FakeChat chat) =>
-        new(_db, decisions, chat, _gitHub, NullLogger<CodeContextBuilder>.Instance);
+        new(_db, decisions, chat, _gitHub, _expander, _embeddings, Options, NullLogger<CodeContextBuilder>.Instance);
 
     /// <summary>Picks the given paths with the given weight in whichever selection offers them.</summary>
     private FakeDecisions Picks(params (string Path, double P)[] picks) => new((call, _, question) =>
@@ -211,6 +219,71 @@ public sealed class CodeContextBuilderTests : IDisposable
         await Sut(decisions, new FakeChat("{}")).BuildAsync(App, Draft);
 
         Assert.Single(decisions.Calls.Single().State["files"]!.AsObject());
+    }
+
+    /// <summary>The decision model judges a short list, never the whole map (decision 95).</summary>
+    [Fact]
+    public async Task The_decision_model_sees_at_most_the_top_candidates_of_each_kind()
+    {
+        Map([.. Enumerable.Range(0, 70).Select(i => ($"src/f{i:D2}.cs", $"Checkout step {i}.")),
+             .. Enumerable.Range(0, 20).Select(i => ($"docs/d{i:D2}.md", $"Checkout guide {i}."))]);
+        var decisions = Picks();
+
+        await Sut(decisions, new FakeChat("{}")).BuildAsync(App, Draft);
+
+        Assert.Equal(CodeContextBuilder.CodeCandidates, decisions.Calls.Single(c => c.Purpose == "code_files").State["files"]!.AsObject().Count);
+        Assert.Equal(CodeContextBuilder.DocCandidates, decisions.Calls.Single(c => c.Purpose == "doc_files").State["files"]!.AsObject().Count);
+    }
+
+    /// <summary>Reporters rarely use the code's words; the written search terms are what reach the right file.</summary>
+    [Fact]
+    public async Task Search_terms_reach_files_the_report_itself_never_names()
+    {
+        Map(("src/Checkout.cs", "Checkout flow."), ("src/Fts.cs", "Builds FTS5 match expressions."));
+        foreach (var f in _db.RepoFiles) { f.Embedding = []; f.EmbeddingModel = ""; } // keywords only
+        _db.SaveChanges();
+        _expander.ExpandAsync(Arg.Any<IssueDraft>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(["fts5", "match"]);
+        var decisions = Picks();
+
+        await Sut(decisions, new FakeChat("{}")).BuildAsync(App, Draft);
+
+        var offered = decisions.Calls.Single().State["files"]!.AsObject().Select(kv => kv.Value!["path"]!.GetValue<string>());
+        Assert.Contains("src/Fts.cs", offered);
+    }
+
+    [Fact]
+    public async Task The_search_terms_are_written_with_the_file_tree_in_view()
+    {
+        Map(("src/Checkout.cs", "Checkout flow."));
+
+        await Sut(Picks(), new FakeChat("{}")).BuildAsync(App, Draft);
+
+        await _expander.Received(1).ExpandAsync(Draft, Arg.Is<string?>(t => t!.Contains("Checkout.cs")), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Without_an_issue_embedding_keyword_search_still_finds_the_files()
+    {
+        Map(("src/Checkout.cs", "Checkout flow."));
+        _embeddings.Fail = true;
+        var chat = new FakeChat("""{"files":[{"path":"src/Checkout.cs","involved":true,"note":"x"}],"notes":""}""");
+
+        var block = await Sut(Picks(("src/Checkout.cs", 0.9)), chat).BuildAsync(App, Draft);
+
+        Assert.Contains("src/Checkout.cs", block);
+    }
+
+    [Fact]
+    public async Task The_issue_is_embedded_once_with_the_configured_model_and_its_search_terms()
+    {
+        Map(("src/Checkout.cs", "Checkout flow."), ("docs/a.md", "Checkout docs."));
+        _expander.ExpandAsync(Arg.Any<IssueDraft>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(["payment"]);
+
+        await Sut(Picks(), new FakeChat("{}")).BuildAsync(App, Draft);
+
+        var (model, inputs) = Assert.Single(_embeddings.Calls);
+        Assert.Equal(Options.OpenRouter.EmbeddingModel, model);
+        Assert.EndsWith("Search terms: payment", Assert.Single(inputs));
     }
 
     [Fact]
