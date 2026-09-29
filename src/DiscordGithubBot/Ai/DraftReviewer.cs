@@ -10,11 +10,23 @@ namespace DiscordGithubBot.Ai;
 
 /// <param name="Title">the title the issue ships with</param>
 /// <param name="Labels">repository labels to attach, in the repository's own order and spelling</param>
-public sealed record DraftReview(string Title, IReadOnlyList<string> Labels);
+public sealed record DraftReview(string Title, IReadOnlyList<string> Labels)
+{
+    /// <summary>
+    /// Every label the model was asked about, in repository order, with its answer; empty when no call was
+    /// made or it failed. What <c>--dry-run</c> prints, since the raw answers are keyed by index.
+    /// </summary>
+    public IReadOnlyList<LabelScore> Scores { get; init; } = [];
+}
+
+/// <param name="Probability">P(the label applies to the issue)</param>
+/// <param name="IsTypeLabel">the model named it as the label the repository marks this kind of issue with,
+/// which attaches it whatever <paramref name="Probability"/> says</param>
+public sealed record LabelScore(string Name, double Probability, bool IsTypeLabel);
 
 public interface IDraftReviewer
 {
-    /// <summary>Chooses the title and the labels. Never throws on a model failure — degrades to the first title and the type label.</summary>
+    /// <summary>Chooses the title and the labels. Never throws on a model failure — degrades to the first title and the conventional type label.</summary>
     Task<DraftReview> ReviewAsync(
         AppConfig app, ReportType type, NormalizedReport draft, IReadOnlyList<RepoLabel> repoLabels,
         CancellationToken ct = default);
@@ -27,11 +39,15 @@ public interface IDraftReviewer
 /// decision model is for: it cannot invent a title nobody wrote or a label the repo does not have.
 /// </summary>
 /// <remarks>
-/// Labels are asked one <c>noul</c> each, because several can apply at once and each is an independent
-/// yes/no. Labels that record a maintainer's triage outcome rather than what the issue is about are never
-/// offered (<see cref="DefaultIgnoredLabels"/>, overridable per app). The repository's canonical type
-/// label is always attached when it exists, so the classified type and the labels cannot disagree about
-/// the basics even when the model is unsure.
+/// Nothing here knows any repository's label scheme: every label is judged by its name and its
+/// description, whatever the repository calls it. The whole label set sits in state, so a label is read
+/// next to the ones it is meant to be told apart from (<c>small</c>/<c>medium</c>/<c>large</c>,
+/// <c>android</c>/<c>ios</c>). Labels are asked one <c>noul</c> each, because several can apply at once —
+/// an issue can be <c>bug</c>, <c>large</c> and <c>clarification needed</c> together — and each is an
+/// independent yes/no. One <c>choice</c> in the same request names the label the repository marks the
+/// classified kind of issue with, and that label is always attached, so the type and the labels cannot
+/// disagree about the basics even when the label's own answer hesitates. Labels that record a
+/// maintainer's triage outcome are never offered (<see cref="DefaultIgnoredLabels"/>, overridable per app).
 /// </remarks>
 public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewer> logger) : IDraftReviewer
 {
@@ -46,12 +62,22 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
     /// </summary>
     internal const double LabelProbability = 0.5;
 
-    /// <summary>Most labels asked about; ~70 tokens each keeps a request well inside the model's context.</summary>
+    /// <summary>
+    /// Probability the type-label choice must give its pick before that label is attached unconditionally.
+    /// Below it the model is torn between labels (or between a label and none), and the pick's own
+    /// <c>noul</c> decides like any other label's. Pre-probe default.
+    /// </summary>
+    internal const double TypeLabelProbability = 0.5;
+
+    /// <summary>Most labels asked about — twice the largest label set expected — so a request stays small.</summary>
     internal const int MaxLabels = 100;
 
     private const int MaxBodyChars = 4000;
     private const string TitleKey = "title";
+    private const string TypeLabelKey = "type_label";
+    private const string NoTypeLabel = "none";
 
+    /// <summary>Names GitHub's default labels use; the type label only when the model could not be asked.</summary>
     private static readonly IReadOnlyList<string> BugLabelNames = ["bug"];
     private static readonly IReadOnlyList<string> FeatureLabelNames = ["enhancement", "feature", "feature request", "feature-request"];
 
@@ -67,12 +93,13 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
             eligible = eligible.Take(MaxLabels).ToList();
         }
 
-        var typeLabel = TypeLabel(type, eligible);
-        var fallback = new DraftReview(draft.Titles[0], typeLabel is null ? [] : [typeLabel.Name]);
+        var conventional = ConventionalTypeLabel(type, eligible);
+        var fallback = new DraftReview(draft.Titles[0], conventional is null ? [] : [conventional.Name]);
 
         var questions = new Dictionary<string, DecisionQuestion>();
         if (draft.Titles.Count > 1) questions[TitleKey] = TitleQuestion(draft.Titles);
-        for (var i = 0; i < eligible.Count; i++) questions[LabelKey(i)] = LabelQuestion(eligible[i]);
+        if (eligible.Count > 0) questions[TypeLabelKey] = TypeLabelQuestion(eligible);
+        for (var i = 0; i < eligible.Count; i++) questions[LabelKey(i)] = LabelQuestion(eligible[i], i);
         if (questions.Count == 0) return fallback;
 
         var state = new JsonObject
@@ -85,6 +112,7 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
                 ["body"] = draft.Body.Length <= MaxBodyChars ? draft.Body : draft.Body[..MaxBodyChars],
             },
         };
+        if (eligible.Count > 0) state["repository"] = new JsonObject { ["labels"] = LabelList(eligible) };
 
         try
         {
@@ -93,12 +121,17 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
             var index = draft.Titles.Count > 1 ? TitleIndex(result.Get<ChoiceAnswer>(TitleKey).Choice) : 0;
             var title = index >= 0 && index < draft.Titles.Count ? draft.Titles[index] : draft.Titles[0];
 
-            var labels = eligible
-                .Where((label, i) => label == typeLabel || result.Get<NoulAnswer>(LabelKey(i)).Probability >= LabelProbability)
-                .Select(l => l.Name)
+            var typeIndex = eligible.Count > 0 ? TypeLabelIndex(result.Get<ChoiceAnswer>(TypeLabelKey)) : -1;
+            var scores = eligible
+                .Select((label, i) => new LabelScore(
+                    label.Name, result.Get<NoulAnswer>(LabelKey(i)).Probability, i == typeIndex))
+                .ToList();
+            var labels = scores
+                .Where(s => s.IsTypeLabel || s.Probability >= LabelProbability)
+                .Select(s => s.Name)
                 .ToList();
 
-            return new DraftReview(title, labels);
+            return new DraftReview(title, labels) { Scores = scores };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -106,7 +139,7 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Reviewing the draft for {Repo} failed; using the first title and the type label.", app.Repo);
+            logger.LogWarning(ex, "Reviewing the draft for {Repo} failed; using the first title and the conventional type label.", app.Repo);
             return fallback;
         }
     }
@@ -118,20 +151,55 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
         "happens; a vague or generic title is worse even if it is shorter.",
         titles.Select((t, i) => new ChoiceOption(TitleOption(i), $"The title \"{t}\".")).ToList());
 
-    private static NoulQuestion LabelQuestion(RepoLabel label)
-    {
-        var meaning = string.IsNullOrWhiteSpace(label.Description)
-            ? "The label has no description; judge it by its name."
-            : $"The label is described as: {label.Description.Trim()}";
+    /// <summary>
+    /// Which label means "this is a bug" (or "a feature request") in this repository. Asked of the label
+    /// set rather than looked up by name, because repositories call it anything — <c>bug</c>,
+    /// <c>type: bug</c>, <c>kind/defect</c> — and only the description may say which one it is.
+    /// </summary>
+    private static ChoiceQuestion TypeLabelQuestion(IReadOnlyList<RepoLabel> labels) => new(
+        "Which one of the repository's labels in `repository.labels` does this repository use to mark an issue " +
+        "as the kind given in `issue.kind`? That label says what kind of issue it is, such as a bug or a feature " +
+        "request — not which part of the app it concerns, how big it is, or what state it is in. Judge each " +
+        "label by its name and its description.",
+        [
+            .. labels.Select((l, i) => new ChoiceOption(LabelKey(i), $"The label \"{l.Name}\". {Meaning(l)}")),
+            new ChoiceOption(NoTypeLabel,
+                "None of the labels marks this kind of issue; they mark other things, such as the area, the " +
+                "platform, the size or the status."),
+        ]);
 
-        return new NoulQuestion(
-            $"Does the repository's GitHub label \"{label.Name}\" apply to the issue in `issue`? {meaning}",
-            IfTrue: $"The issue squarely falls under what \"{label.Name}\" marks.",
-            IfFalse: $"\"{label.Name}\" does not fit this issue, or fits it only loosely.");
+    private static NoulQuestion LabelQuestion(RepoLabel label, int index) => new(
+        $"Does the repository's GitHub label \"{label.Name}\" " +
+        $"(`repository.labels[{index.ToString(CultureInfo.InvariantCulture)}]`) apply to the issue in `issue`? " +
+        $"{Meaning(label)} Labels are not exclusive — an issue can carry several at once, such as its kind, its " +
+        "size and what it still needs — so judge this one on its own; the other labels in `repository.labels` " +
+        "show what it is meant to be told apart from.",
+        IfTrue: $"The issue squarely falls under what \"{label.Name}\" marks.",
+        IfFalse: $"\"{label.Name}\" does not fit this issue, or fits it only loosely.");
+
+    /// <summary>What the label means: its description, or a note that it has none and its name must do.</summary>
+    private static string Meaning(RepoLabel label)
+    {
+        if (string.IsNullOrWhiteSpace(label.Description)) return "The label has no description; judge it by its name.";
+
+        // Descriptions are usually fragments ("Android app"); a stop keeps them from running into what follows.
+        var description = label.Description.Trim();
+        return $"The label is described as: {description}{(description[^1] is '.' or '!' or '?' ? "" : ".")}";
     }
 
-    /// <summary>The repository's own label for the classified type, when it has one under a conventional name.</summary>
-    private static RepoLabel? TypeLabel(ReportType type, IReadOnlyList<RepoLabel> eligible)
+    /// <summary>The label set as state, in the order the questions index it; a missing description is left out.</summary>
+    private static JsonArray LabelList(IReadOnlyList<RepoLabel> labels) =>
+    [
+        .. labels.Select(l => (JsonNode)(string.IsNullOrWhiteSpace(l.Description)
+            ? new JsonObject { ["name"] = l.Name }
+            : new JsonObject { ["name"] = l.Name, ["description"] = l.Description.Trim() })),
+    ];
+
+    /// <summary>
+    /// The repository's label for the classified type under a name GitHub's defaults use. Only the fallback
+    /// when the model cannot be asked: with a model answer, the type label is whichever label it names.
+    /// </summary>
+    private static RepoLabel? ConventionalTypeLabel(ReportType type, IReadOnlyList<RepoLabel> eligible)
     {
         var names = type == ReportType.Bug ? BugLabelNames : FeatureLabelNames;
         return names
@@ -139,14 +207,21 @@ public sealed class DraftReviewer(IDecisionModel decisions, ILogger<DraftReviewe
             .FirstOrDefault(l => l is not null);
     }
 
+    /// <returns>The index of the label the choice names with enough probability, or -1 for none.</returns>
+    private static int TypeLabelIndex(ChoiceAnswer answer) =>
+        answer.Probability(answer.Choice) >= TypeLabelProbability ? OptionNumber(answer.Choice, "label_") : -1;
+
     private static string LabelKey(int index) => $"label_{index.ToString(CultureInfo.InvariantCulture)}";
 
     private static string TitleOption(int index) => $"title_{(index + 1).ToString(CultureInfo.InvariantCulture)}";
 
     /// <returns>The zero-based index the option names, or -1 for anything that is not a title option.</returns>
-    private static int TitleIndex(string option) =>
-        option.StartsWith("title_", StringComparison.Ordinal)
-        && int.TryParse(option.AsSpan("title_".Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)
-            ? n - 1
+    private static int TitleIndex(string option) => OptionNumber(option, "title_") is var n and > 0 ? n - 1 : -1;
+
+    /// <returns>The number after <paramref name="prefix"/>, or -1 when the option does not start with it.</returns>
+    private static int OptionNumber(string option, string prefix) =>
+        option.StartsWith(prefix, StringComparison.Ordinal)
+        && int.TryParse(option.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+            ? n
             : -1;
 }

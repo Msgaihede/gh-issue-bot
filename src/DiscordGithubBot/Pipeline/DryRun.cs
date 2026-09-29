@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using DiscordGithubBot.Ai;
 using DiscordGithubBot.Data;
@@ -25,6 +26,11 @@ public static class DryRun
         foreach (var title in normalized.Titles)
             sb.AppendLine($"  {(title == review.Title ? "*" : " ")} {title}");
         sb.AppendLine($"Labels:  {(review.Labels.Count == 0 ? "(none)" : string.Join(", ", review.Labels))}");
+        // Every label asked about, attached ones marked like the chosen title: the P each one got is what
+        // the label gate is tuned on, and the raw Debug answers only know labels by index.
+        foreach (var score in review.Scores)
+            sb.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"  {(review.Labels.Contains(score.Name) ? "*" : " ")} {score.Probability:0.00}  {score.Name}{(score.IsTypeLabel ? "  (type label)" : "")}"));
 
         sb.Append($"Dedup:   {verdict.Kind} over {openIssues.Count} open issue(s)");
         if (verdict.IssueNumber is { } match) sb.Append($" -> {Issue(match)}");

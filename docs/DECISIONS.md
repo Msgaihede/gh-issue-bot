@@ -1592,3 +1592,31 @@ below record the choices inside it that are not obvious from the code.
      which still goes out if answering fails. The duplicate-comment path is
      unchanged — its comment *is* the model's extraction, so there is nothing
      to post early.
+
+## 2026-09-29 (label context)
+
+106. **Labels are judged by name and description, against the whole label
+     set; the type label is Jev's pick, not a name match.** Amends decision
+     84. Each label's `noul` already carried its description, but the
+     guaranteed type label was found by name only (`bug`;
+     `enhancement`/`feature`/`feature request`), so a repository calling it
+     `type: bug` or `kind/defect` never got it, and one where `enhancement`
+     is described as "improvement to existing behaviour" got it on brand-new
+     feature requests. The same `draft_review` request now carries one
+     `choice` over the labels (plus "none"): which one does this repository
+     use to mark the kind in `issue.kind`, judged by name and description.
+     Its pick is attached at P ≥ 0.5 (pre-probe, `TypeLabelProbability`);
+     below that the pick's own `noul` decides like any other label's. The
+     name match survives only as the fallback when the call fails. The whole
+     label set (names, descriptions) also goes into state as
+     `repository.labels`, and each `noul` points at its entry there, so a
+     label is read next to the ones it is meant to be told apart from —
+     `large` means little without `small` — and the question says outright
+     that labels are not exclusive, since an issue can be `bug`, `large` and
+     `clarification needed` at once. State is billed once per request, so
+     the set costs ~600 tokens at 40 labels; the longer `noul` text and the
+     choice bring the review to ≈ $0.0003. The cap stays 100 labels: the
+     repositories this serves carry about 50 at most. `--dry-run` now
+     prints every asked label with its P, the attached ones marked and the
+     type label named, because the raw Debug answers only know labels by
+     index.

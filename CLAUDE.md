@@ -42,7 +42,7 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
 - Structured-output schemas are generated from the answer DTO
   (`StructuredOutput`); strict mode needs every property required and no
   nullable members — keep DTO fields non-nullable.
-- Decision thresholds (dedup 0.5/0.2, shortlist floor 0.05) are unprobed
+- Decision thresholds (labels and type label 0.5, dedup 0.5/0.2, shortlist floor 0.05) are unprobed
   pre-probe defaults; tune them from `--dry-run` output, not by guessing.
 - The DB schema is stamped with `PRAGMA user_version`: bump
   `DatabaseSchema.Version` on ANY entity/column/index change, or existing

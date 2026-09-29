@@ -27,11 +27,22 @@ public class DraftReviewerTests
 
     private static DraftReviewer Sut(FakeDecisions decisions) => new(decisions, NullLogger<DraftReviewer>.Instance);
 
-    /// <summary>Picks <paramref name="title"/> and gives each label question the probability its label name maps to.</summary>
-    private static FakeDecisions Answers(string title, Dictionary<string, double> labelP) => new((_, key, question) =>
-        key == "title"
-            ? FakeDecisions.Chosen(title)
-            : FakeDecisions.Noul(labelP.FirstOrDefault(kv => question.Instructions.Contains($"\"{kv.Key}\"")).Value));
+    /// <summary>
+    /// Picks <paramref name="title"/>, names <paramref name="typeLabel"/> as the repo's type label (none when
+    /// null), and gives each label question the probability its label name maps to (0 when unmapped).
+    /// </summary>
+    private static FakeDecisions Answers(string title, Dictionary<string, double> labelP, string? typeLabel = null) =>
+        new((_, key, question) => question switch
+        {
+            ChoiceQuestion when key == "title" => FakeDecisions.Chosen(title),
+            ChoiceQuestion q => FakeDecisions.Chosen(
+                q.Options.FirstOrDefault(o => typeLabel is not null && o.Criterion.StartsWith($"The label \"{typeLabel}\""))?.Key
+                ?? "none"),
+            _ => FakeDecisions.Noul(labelP.FirstOrDefault(kv => question.Instructions.Contains($"\"{kv.Key}\"")).Value),
+        });
+
+    private static ChoiceQuestion TypeLabelQuestion(FakeDecisions decisions) =>
+        decisions.Calls.Single().Questions.Values.OfType<ChoiceQuestion>().Single(q => q.Options.Any(o => o.Key == "none"));
 
     [Fact]
     public async Task The_chosen_title_ships()
@@ -104,34 +115,121 @@ public class DraftReviewerTests
         Assert.Contains("duplicate", review.Labels);
     }
 
-    /// <summary>The classified type and the labels must agree on the basics even when the model hesitates.</summary>
+    /// <summary>Kind, size and what an issue still needs are independent, so all three can ship together.</summary>
     [Fact]
-    public async Task The_repos_type_label_is_always_attached()
+    public async Task Every_label_that_fits_is_attached_not_just_one()
+    {
+        RepoLabel[] labels =
+        [
+            new("bug", "Something isn't working"),
+            new("small", "Under a day of work"),
+            new("large", "Several days of work"),
+            new("clarification needed", "The report is missing information we need to act on it"),
+            new("docs", "Documentation"),
+        ];
+        var decisions = Answers("title_1",
+            new() { ["bug"] = 0.9, ["small"] = 0.2, ["large"] = 0.7, ["clarification needed"] = 0.8, ["docs"] = 0.1 },
+            typeLabel: "bug");
+
+        var review = await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, labels);
+
+        Assert.Equal(["bug", "large", "clarification needed"], review.Labels);
+    }
+
+    /// <summary>Descriptions often carry what the name leaves out, so the model reads both, for every label.</summary>
+    [Fact]
+    public async Task The_whole_label_set_is_in_state_with_names_and_descriptions()
+    {
+        var decisions = Answers("title_1", []);
+
+        await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, Labels);
+
+        var call = decisions.Calls.Single();
+        var labels = call.State["repository"]!["labels"]!.AsArray();
+        Assert.Equal(["bug", "android", "ios"], labels.Select(l => l!["name"]!.GetValue<string>()));
+        Assert.Equal("Android app", labels[1]!["description"]!.GetValue<string>());
+        Assert.Null(labels[2]!["description"]);
+        Assert.Contains(call.Questions.Values.OfType<NoulQuestion>(),
+            q => q.Instructions.Contains("\"android\" (`repository.labels[1]`)"));
+    }
+
+    /// <summary>
+    /// A repository names its type label however it likes; the model finds it by name and description,
+    /// and it is attached even when its own yes/no hesitates, so the type and the labels agree.
+    /// </summary>
+    [Fact]
+    public async Task A_custom_named_type_label_the_model_names_is_always_attached()
+    {
+        RepoLabel[] labels = [new("type: defect", "Something is broken"), new("area: sync", "Cloud sync")];
+        var decisions = Answers("title_1", new() { ["type: defect"] = 0.1 }, typeLabel: "type: defect");
+
+        var review = await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, labels);
+
+        Assert.Equal(["type: defect"], review.Labels);
+        Assert.True(review.Scores[0].IsTypeLabel);
+        var options = TypeLabelQuestion(decisions).Options;
+        Assert.Equal(["label_0", "label_1", "none"], options.Select(o => o.Key));
+        Assert.Contains("Something is broken", options[0].Criterion);
+        Assert.Equal("bug report", decisions.Calls.Single().State["issue"]!["kind"]!.GetValue<string>());
+    }
+
+    /// <summary>A conventional name is not enough: the description says what the label is for.</summary>
+    [Fact]
+    public async Task A_bug_label_is_not_forced_when_the_model_names_no_type_label()
     {
         var decisions = Answers("title_1", new() { ["bug"] = 0.1 });
 
         var review = await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, Labels);
 
-        Assert.Contains("bug", review.Labels);
+        Assert.DoesNotContain("bug", review.Labels);
     }
 
     [Fact]
-    public async Task A_feature_gets_the_repos_enhancement_label_in_the_repos_spelling()
+    public async Task A_torn_type_label_choice_attaches_nothing_by_itself()
     {
-        RepoLabel[] labels = [new("Enhancement", ""), new("bug", "")];
+        var decisions = new FakeDecisions((_, key, question) => question switch
+        {
+            ChoiceQuestion when key == "title" => FakeDecisions.Chosen("title_1"),
+            ChoiceQuestion => FakeDecisions.Choice(("label_0", 0.45), ("label_1", 0.4), ("none", 0.15)),
+            _ => FakeDecisions.Noul(0.1),
+        });
 
-        var review = await Sut(Answers("title_1", [])).ReviewAsync(App, ReportType.Feature, Draft, labels);
+        var review = await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, Labels);
 
-        Assert.Equal(["Enhancement"], review.Labels);
+        Assert.Empty(review.Labels);
+        Assert.DoesNotContain(review.Scores, s => s.IsTypeLabel);
     }
 
     [Fact]
-    public async Task A_failed_call_falls_back_to_the_first_title_and_the_type_label()
+    public async Task Every_asked_label_is_scored_in_repo_order()
+    {
+        var decisions = Answers("title_1", new() { ["android"] = 0.9, ["ios"] = 0.3 }, typeLabel: "bug");
+
+        var review = await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, Labels);
+
+        Assert.Equal(
+            [new LabelScore("bug", 0, true), new LabelScore("android", 0.9, false), new LabelScore("ios", 0.3, false)],
+            review.Scores);
+    }
+
+    [Fact]
+    public async Task A_failed_call_falls_back_to_the_first_title_and_the_conventional_type_label()
     {
         var review = await Sut(FakeDecisions.Failing()).ReviewAsync(App, ReportType.Bug, Draft, Labels);
 
         Assert.Equal("Save does nothing", review.Title);
         Assert.Equal(["bug"], review.Labels);
+        Assert.Empty(review.Scores);
+    }
+
+    [Fact]
+    public async Task A_failed_call_gives_a_feature_the_repos_enhancement_label_in_the_repos_spelling()
+    {
+        RepoLabel[] labels = [new("Enhancement", ""), new("bug", "")];
+
+        var review = await Sut(FakeDecisions.Failing()).ReviewAsync(App, ReportType.Feature, Draft, labels);
+
+        Assert.Equal(["Enhancement"], review.Labels);
     }
 
     [Fact]
@@ -163,5 +261,7 @@ public class DraftReviewerTests
         await Sut(decisions).ReviewAsync(App, ReportType.Bug, Draft, many);
 
         Assert.Equal(DraftReviewer.MaxLabels, decisions.Calls.Single().Questions.Values.OfType<NoulQuestion>().Count());
+        Assert.Equal(DraftReviewer.MaxLabels + 1, TypeLabelQuestion(decisions).Options.Count);
+        Assert.Equal(DraftReviewer.MaxLabels, decisions.Calls.Single().State["repository"]!["labels"]!.AsArray().Count);
     }
 }

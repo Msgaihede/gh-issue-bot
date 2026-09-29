@@ -12,7 +12,10 @@ public class DryRunTests
     private static ReportAnalysis Analysis(DuplicateVerdict verdict) => new(
         ReportType.Bug,
         new NormalizedReport(["Save does nothing", "Save ignored after rotation"], "## Description\nIt broke."),
-        new DraftReview("Save ignored after rotation", ["bug", "android"]),
+        new DraftReview("Save ignored after rotation", ["bug", "android"])
+        {
+            Scores = [new("bug", 0.3, true), new("android", 0.91, false), new("ios", 0.07, false)],
+        },
         verdict,
         [Open(7, "Save broken on Android"), Open(9, "Crash on launch")]);
 
@@ -28,6 +31,9 @@ public class DryRunTests
         Assert.Contains("    Save does nothing", text);
         Assert.Contains("  * Save ignored after rotation", text);
         Assert.Contains("Labels:  bug, android", text);
+        Assert.Contains("  * 0.30  bug  (type label)", text);
+        Assert.Contains("  * 0.91  android", text);
+        Assert.Contains("    0.07  ios", text);
         Assert.Contains("It broke.", text);
         Assert.Contains("--- code context (added on \"Create issue\") ---\n(none)", text.Replace("\r\n", "\n"));
         Assert.Contains("AI usage: $0.0031 in 2 call(s), 12,345 decision-model input tokens", text);
