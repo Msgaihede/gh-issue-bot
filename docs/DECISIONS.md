@@ -1369,3 +1369,30 @@ below record the choices inside it that are not obvious from the code.
     the pass has already logged — and the next check retries; the pass
     count is bounded by what a full 2000-file build needs. The dry run uses
     the same update, so its code context always reads a complete map.
+
+95. **Spike: file retrieval for code context — embeddings plus keywords
+    beat "Jev reads the whole map" at 3% of the cost.** Selecting files by
+    showing Jev every summary cost ~145k decision tokens per created issue on
+    mtg-grimoire (1,551 mapped files) and grows with the repository. The spike
+    (`tools/RetrievalSpike`) scored cheap retrievers against real ground truth:
+    the 133 mtg-grimoire issues closed by a linked pull request, with the files
+    each fix changed as the answer. Reports were written two ways — the issue
+    as filed, and rewritten by GPT-6 Luna as a non-technical Discord user would
+    phrase it (no identifiers, jargon or the issue's terms) and then drafted by
+    the bot — because the owner flagged that users do not use the code's
+    vocabulary. User-voice hit@10 / hit@40 for code files: BM25 keywords over
+    path + summary 62% / 83%; plus Luna-written search terms 72% / 92%
+    (generic) and 78% / 90% (grounded in the repository's file tree);
+    embeddings of path + summary 86% / 92% (voyage-4-lite), 84% / 94%
+    (voyage-4); the code-specialised voyage-code-4 was worst at 68% / 89%,
+    since it matches prose summaries, not code; hybrids of tree-grounded
+    keywords and embeddings fused by rank 87% / 95%. With n = 133,
+    differences of 2–3 points are noise: the top configurations tie. For docs
+    (n = 86, noisier ground truth) the hybrid led, hit@5 57% vs 51% for
+    keywords + tree terms and 47–50% for embeddings alone. End to end on 25
+    issues, Jev picking 4 files from a 40-file shortlist matched Jev picking
+    from the whole map — both 84% — with 4,771 instead of 145,009 decision
+    tokens. Embedding a whole map costs under a cent. The retrieval pieces
+    (`TextTokens`, `KeywordIndex`, `VectorIndex`, `RankFusion`,
+    `EmbeddingClient`, `QueryExpander`) are in the bot but not yet wired into
+    `CodeContextBuilder`.

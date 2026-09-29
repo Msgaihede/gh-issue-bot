@@ -83,6 +83,8 @@ public static class HostSetup
             .RedactLoggedHeaders(RedactedHeaders);
         services.AddHttpClient<IDecisionModel, DecisionClient>(c => ConfigureOpenRouterClient(c, options))
             .RedactLoggedHeaders(RedactedHeaders);
+        services.AddHttpClient<IEmbeddingModel, EmbeddingClient>(c => ConfigureOpenRouterClient(c, options))
+            .RedactLoggedHeaders(RedactedHeaders);
 
         // pipeline
         services.AddScoped<IReportClassifier, ReportClassifier>();
@@ -92,6 +94,7 @@ public static class HostSetup
         services.AddScoped<IAdditionalInfoExtractor, AdditionalInfoExtractor>();
         services.AddScoped<IRepoMapService, RepoMapService>();
         services.AddScoped<ICodeContextBuilder, CodeContextBuilder>();
+        services.AddScoped<DiscordGithubBot.CodeContext.Retrieval.IQueryExpander, DiscordGithubBot.CodeContext.Retrieval.QueryExpander>();
         services.AddScoped<IIssueSyncService, IssueSyncService>();
         services.AddScoped<IPendingReportStore, PendingReportStore>();
         services.AddScoped<IReportPipeline, ReportPipeline>();
