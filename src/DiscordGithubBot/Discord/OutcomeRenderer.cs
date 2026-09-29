@@ -150,11 +150,18 @@ public static class OutcomeRenderer
 
     /// <summary>Confirmation for a created issue.</summary>
     public static MessageComponent RenderCreated(CreatedIssueResult issue) =>
-        Message($"✅ Created [#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})");
+        RenderText($"✅ Created [#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})");
 
     /// <summary>Confirmation for a report attached to an existing issue.</summary>
     public static MessageComponent RenderCommented(CommentResult comment) =>
-        Message($"💬 Added your report to [#{comment.IssueNumber}]({comment.CommentUrl})");
+        RenderText($"💬 Added your report to [#{comment.IssueNumber}]({comment.CommentUrl})");
+
+    /// <summary>
+    /// A plain one-line answer, as a text display: an answer to a click replaces a Components V2 message,
+    /// which cannot carry message content.
+    /// </summary>
+    public static MessageComponent RenderText(string text) =>
+        new ComponentBuilderV2().WithTextDisplay(Truncate(text, MaxBodyChars)).Build();
 
     private static MessageComponent RenderUncertain(
         IReadOnlyList<CandidateIssue> candidates, Guid pendingId, string? notice)
@@ -186,9 +193,6 @@ public static class OutcomeRenderer
         labels.Count == 0
             ? ""
             : " · Labels: " + Truncate(string.Join(", ", labels.Select(l => $"`{l.Replace("`", "'")}`")), MaxNoticeChars);
-
-    private static MessageComponent Message(string text) =>
-        new ComponentBuilderV2().WithTextDisplay(Truncate(text, MaxBodyChars)).Build();
 
     private static MessageComponent Container(Action<ContainerBuilder> build)
     {
