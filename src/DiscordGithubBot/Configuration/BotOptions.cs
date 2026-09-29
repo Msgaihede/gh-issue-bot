@@ -14,6 +14,51 @@ public sealed class OpenAIOptions
     public string EmbeddingModel { get; set; } = "text-embedding-3-small";
 }
 
+/// <summary>
+/// Every model call the bot makes goes through OpenRouter: chat completions for text it has to write, the
+/// Decisions API for judgments it has to make. Both models are pinned here, never aliased — a decision
+/// threshold belongs to the build it was set on.
+/// </summary>
+public sealed class OpenRouterOptions
+{
+    /// <summary>Tried first: OpenAI's half-price flex tier, then OpenAI's regular endpoint.</summary>
+    public static readonly IReadOnlyList<string> DefaultChatProviders = ["openai/flex", "openai"];
+
+    /// <summary>Where a call goes when the first attempt missed its deadline or failed transiently.</summary>
+    public static readonly IReadOnlyList<string> DefaultChatRetryProviders = ["openai"];
+
+    public string ApiKey { get; set; } = "";
+
+    /// <summary>Model that writes drafts, file summaries and code notes.</summary>
+    public string ChatModel { get; set; } = "openai/gpt-6-luna";
+
+    /// <summary>
+    /// OpenRouter <c>provider.order</c> for the first attempt of every chat call. Nullable rather than
+    /// initialised because the configuration binder appends to an existing list instead of replacing it —
+    /// a configured list would otherwise land after the defaults. See <see cref="EffectiveChatProviders"/>.
+    /// </summary>
+    public List<string>? ChatProviders { get; set; }
+
+    /// <summary><c>provider.order</c> for the single retry; nullable for the same reason as <see cref="ChatProviders"/>.</summary>
+    public List<string>? ChatRetryProviders { get; set; }
+
+    /// <summary>
+    /// How long an interactive chat call (a reporter is waiting) may spend on the first attempt before it is
+    /// retried on <see cref="EffectiveChatRetryProviders"/>. Flex can queue; this caps what that costs.
+    /// </summary>
+    public int ChatDeadlineSeconds { get; set; } = 30;
+
+    /// <summary>OpenRouter <c>reasoning.effort</c> for chat calls; empty leaves the model's default.</summary>
+    public string ReasoningEffort { get; set; } = "low";
+
+    /// <summary>Decision (System One) model for every judgment: type, title, labels, dedup, file selection.</summary>
+    public string DecisionModel { get; set; } = "typesafe/jev-1.13";
+
+    public IReadOnlyList<string> EffectiveChatProviders => ChatProviders ?? DefaultChatProviders;
+
+    public IReadOnlyList<string> EffectiveChatRetryProviders => ChatRetryProviders ?? DefaultChatRetryProviders;
+}
+
 public sealed class DatabaseOptions
 {
     public string Path { get; set; } = "db/app.db";
@@ -82,6 +127,7 @@ public sealed class BotOptions
 {
     public DiscordOptions Discord { get; set; } = new();
     public OpenAIOptions OpenAI { get; set; } = new();
+    public OpenRouterOptions OpenRouter { get; set; } = new();
     public DatabaseOptions Database { get; set; } = new();
     public List<AppConfig> Apps { get; set; } = new();
 

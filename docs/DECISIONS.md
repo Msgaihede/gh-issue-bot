@@ -1068,3 +1068,50 @@ document that contradicts itself.
     exactly the limit plus one still reaches the length check, and anything
     larger fails inside `HttpClient` and lands in the downloader's existing
     catch as an ordinary skipped file.
+
+## 2026-09-29 (OpenRouter + Jev redesign)
+
+The redesign is specified in
+`docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md`; the entries
+below record the choices inside it that are not obvious from the code.
+
+76. **All model traffic goes through OpenRouter, over two hand-rolled typed
+    `HttpClient`s.** OpenRouter has no .NET SDK, and the two features this
+    bot leans on — `provider.order` routing for the flex tier and the
+    alpha Decisions API — are not reachable through
+    `Microsoft.Extensions.AI`'s OpenAI adapter without patching raw request
+    JSON. Two small clients (`OpenRouterChatClient`, `DecisionClient`) are
+    less code than that plumbing and are tested at the HTTP level, the same
+    trade decision 6 made for GitHub. Structured output keeps its
+    guarantee: the strict JSON schema is generated from the very DTO the
+    answer is parsed into (`StructuredOutput`), tightened to what strict mode
+    demands (closed objects, every property required, no nullable members),
+    so schema and parser cannot drift. A completion that stopped early,
+    refused, or does not fit the schema is a failure, never a partial answer.
+
+77. **Flex is back, as the default, with the queueing problem that got it
+    reverted (decision 71) handled explicitly.** The owner's requirement is
+    flex first with fallback to the regular tier. Two mechanisms cover the
+    two ways flex hurts: rejections (429 when capacity runs out) are
+    absorbed server-side by OpenRouter itself, because `provider.order`
+    lists `openai/flex` then `openai` with fallbacks allowed; *queueing* is
+    invisible to OpenRouter, so every interactive call (a reporter waiting on
+    a deferred interaction) carries a client-side deadline,
+    `ChatDeadlineSeconds` (30 s), after which — or after any other transient
+    failure — it is retried once on `ChatRetryProviders` (`openai`, regular
+    tier). Worst case a reporter waits the deadline plus one regular call,
+    and a request abandoned mid-queue may still be billed at the flex rate,
+    which is half of what the retry costs. Background calls (repo-map upkeep)
+    get a 10-minute deadline and simply wait the queue out. Service-tier
+    endpoints must be named explicitly in `provider.order` — a bare
+    `openai` never matches `openai/flex` — which is why the tier is a
+    configured provider list rather than a flag. The two provider lists are
+    nullable config lists because the configuration binder appends to an
+    initialised list instead of replacing it.
+
+78. **Every OpenRouter response's `usage.cost` feeds a scoped
+    `AiUsageMeter`.** The redesign has a hard budget ($5–10 for 500–1000
+    issues a month); OpenRouter prices each response in USD, so the bot can
+    log what each report actually cost instead of trusting the estimate in
+    the spec. The meter is scoped — one report, one click, one refresh — and
+    locked, because a report fans decision calls out in parallel.
