@@ -68,6 +68,9 @@ public class DecisionClientTests
         Assert.Equal(0.93, result.Get<NoulAnswer>("is_ui").Probability);
         Assert.Equal(0.75, result.Get<ScoreAnswer>("same").Probability(2));
         Assert.Equal(0.0000126m, _usage.TotalCost);
+        // Under BYOK the decision provider bills directly and the response carries no dollar figure; the
+        // tokens are the billing unit the meter can still report.
+        Assert.Equal(300, _usage.DecisionInputTokens);
     }
 
     /// <summary>A missing or mistyped answer must fail loudly — defaulting it would be acting on nothing.</summary>

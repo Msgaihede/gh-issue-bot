@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Text;
 using DiscordGithubBot.Ai;
 using DiscordGithubBot.Data;
+using DiscordGithubBot.OpenRouter;
 
 namespace DiscordGithubBot.Pipeline;
 
@@ -13,7 +13,7 @@ namespace DiscordGithubBot.Pipeline;
 /// </summary>
 public static class DryRun
 {
-    public static string Format(ReportAnalysis analysis, string? codeContext, decimal cost, int calls)
+    public static string Format(ReportAnalysis analysis, string? codeContext, AiUsageMeter usage)
     {
         var (type, normalized, review, verdict, openIssues) = analysis;
         var byNumber = openIssues.ToDictionary(i => i.IssueNumber);
@@ -37,9 +37,7 @@ public static class DryRun
         sb.AppendLine().AppendLine("--- body ---").AppendLine(normalized.Body.Trim());
         sb.AppendLine().AppendLine("--- code context (added on \"Create issue\") ---")
             .AppendLine(string.IsNullOrWhiteSpace(codeContext) ? "(none)" : codeContext.Trim());
-        sb.AppendLine().AppendLine(
-            $"AI cost: ${cost.ToString("0.#####", CultureInfo.InvariantCulture)} in {calls} call(s). " +
-            "Raw decision probabilities are in the Debug lines above.");
+        sb.AppendLine().AppendLine($"AI usage: {usage}. Raw decision probabilities are in the Debug lines above.");
 
         return sb.ToString();
     }

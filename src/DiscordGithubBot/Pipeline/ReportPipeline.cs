@@ -145,8 +145,8 @@ public sealed class ReportPipeline(
         await store.SaveAsync(pending, ct);
 
         logger.LogInformation(
-            "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI cost ${Cost} in {Calls} call(s).",
-            type, app.Repo, verdict.Kind, openIssues.Count, usage.TotalCost, usage.Calls);
+            "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI usage {Usage}.",
+            type, app.Repo, verdict.Kind, openIssues.Count, usage);
         return Route(pending.Id, draft, type, review.Labels, verdict, shortlist);
     }
 
@@ -208,8 +208,8 @@ public sealed class ReportPipeline(
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Created issue #{Number} in {Repo} for {Reporter}; AI cost ${Cost} in {Calls} call(s).",
-                issue.Number, app.Repo, report.ReporterDisplayName, usage.TotalCost, usage.Calls);
+                "Created issue #{Number} in {Repo} for {Reporter}; AI usage {Usage}.",
+                issue.Number, app.Repo, report.ReporterDisplayName, usage);
             return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch

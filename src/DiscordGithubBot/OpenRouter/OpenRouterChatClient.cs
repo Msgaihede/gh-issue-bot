@@ -108,11 +108,13 @@ public sealed class OpenRouterChatClient(
             throw new OpenRouterException("OpenRouter returned a body that is not a completion.", null, isTransient: true, ex);
         }
 
-        usage.Record(completion.Usage?.Cost);
+        var spend = completion.Usage?.Spend;
+        usage.Record(spend);
         logger.LogDebug(
-            "Chat call {Name} answered by {Model} via {Provider}: {Prompt} in / {Completion} out, ${Cost}.",
+            "Chat call {Name} answered by {Model} via {Provider}: {Prompt} in / {Completion} out, ${Cost}{Byok}.",
             prompt.Name, completion.Model, completion.Provider,
-            completion.Usage?.PromptTokens, completion.Usage?.CompletionTokens, completion.Usage?.Cost);
+            completion.Usage?.PromptTokens, completion.Usage?.CompletionTokens, spend,
+            completion.Usage?.IsByok == true ? " (BYOK: billed by the provider)" : "");
 
         return ParseAnswer<T>(prompt.Name, completion);
     }
@@ -243,7 +245,24 @@ public sealed class OpenRouterChatClient(
     {
         [JsonPropertyName("prompt_tokens")] public int? PromptTokens { get; set; }
         [JsonPropertyName("completion_tokens")] public int? CompletionTokens { get; set; }
-        [JsonPropertyName("input_tokens")] public int? InputTokens { get; set; }
         [JsonPropertyName("cost")] public decimal? Cost { get; set; }
+        [JsonPropertyName("is_byok")] public bool? IsByok { get; set; }
+        [JsonPropertyName("cost_details")] public CostDetailsDto? CostDetails { get; set; }
+
+        /// <summary>
+        /// What the call actually cost. With BYOK (the account's own OpenAI key behind OpenRouter), <c>cost</c>
+        /// is only OpenRouter's fee — usually 0 — and the provider bills the inference itself, which OpenRouter
+        /// reports as <c>cost_details.upstream_inference_cost</c>. Without BYOK that field is already inside
+        /// <c>cost</c>, so it is only added when the call was BYOK.
+        /// </summary>
+        public decimal? Spend =>
+            Cost is null && CostDetails?.UpstreamInferenceCost is null
+                ? null
+                : (Cost ?? 0) + (IsByok == true ? CostDetails?.UpstreamInferenceCost ?? 0 : 0);
+    }
+
+    internal sealed class CostDetailsDto
+    {
+        [JsonPropertyName("upstream_inference_cost")] public decimal? UpstreamInferenceCost { get; set; }
     }
 }

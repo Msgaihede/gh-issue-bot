@@ -95,11 +95,12 @@ public sealed class DecisionClient(
 
         var model = body["model"]?.GetValue<string>() ?? options.OpenRouter.DecisionModel;
         var cost = body["usage"]?["cost"]?.GetValue<decimal>();
-        usage.Record(cost);
+        var inputTokens = body["usage"]?["input_tokens"]?.GetValue<int>() ?? 0;
+        usage.Record(cost, inputTokens);
 
         if (logger.IsEnabled(LogLevel.Debug))
-            logger.LogDebug("Decision {Purpose} by {Model} (${Cost}): {Answers}",
-                purpose, model, cost, answers.ToJsonString());
+            logger.LogDebug("Decision {Purpose} by {Model} ({Tokens} input tokens, ${Cost}): {Answers}",
+                purpose, model, inputTokens, cost, answers.ToJsonString());
 
         return new DecisionResult(model, DecisionResult.ParseAnswers(answers));
     }

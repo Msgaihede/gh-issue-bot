@@ -218,10 +218,25 @@ per million input tokens with free output.
 1000 reports a month come to about **$3.70** on flex, about $5.50 if every
 chat call fell back to the regular tier; keeping the repository map current
 adds cents (a first build of a 1000-file repository is about $0.15, after
-that only changed files are paid for). The bot logs the actual OpenRouter cost
-of every drafted report, created issue and map refresh. **Set a monthly credit
-limit on the OpenRouter key** — that is the hard cap; the per-user report limit
-only stops one account from spending it.
+that only changed files are paid for). The first live dry runs came in well
+under the estimate for the draft itself: $0.00006–0.00008 per draft on flex,
+plus about 1,000 Jev input tokens for type and title (dedup and code context
+add more once a repository with open issues and a map is involved).
+
+The bot logs the AI usage of every drafted report, created issue and map
+refresh as `$<cost> in <n> call(s), <k> decision-model input tokens`.
+
+**BYOK.** With your own provider keys behind OpenRouter ("bring your own
+key"), OpenRouter's reported `cost` is only its own fee — usually $0 — and the
+provider bills you directly. Chat responses still say what OpenAI charged
+(`cost_details.upstream_inference_cost`), and the bot counts that. Decision
+responses report no upstream cost, so for Jev the logs show input tokens
+instead: TypeSafe bills those at $0.042 per million.
+
+**Hard caps.** Without BYOK, set a monthly credit limit on the OpenRouter key.
+With BYOK that limit only caps OpenRouter's fees — set the budget limits on
+the OpenAI and TypeSafe accounts instead. The per-user report limit only stops
+one account from spending the budget.
 
 ### Tuning the decisions
 

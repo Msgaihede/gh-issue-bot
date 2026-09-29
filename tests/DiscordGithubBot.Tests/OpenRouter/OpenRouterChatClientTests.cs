@@ -142,6 +142,40 @@ public class OpenRouterChatClientTests
         Assert.Contains("length", ex.Message);
     }
 
+    /// <summary>
+    /// With the account's own OpenAI key behind OpenRouter, "cost" is only OpenRouter's fee (0 here) and OpenAI
+    /// bills the inference directly; the meter must count what was really spent, or every log reads $0.
+    /// </summary>
+    [Fact]
+    public async Task A_byok_call_counts_the_upstream_inference_cost()
+    {
+        _http.Then(HttpStatusCode.OK, JsonSerializer.Serialize(new
+        {
+            choices = new[] { new { finish_reason = "stop", message = new { content = """{"title":"t","tags":[]}""" } } },
+            usage = new { prompt_tokens = 8, completion_tokens = 6, cost = 0m, is_byok = true,
+                cost_details = new { upstream_inference_cost = 0.0000019m } },
+        }));
+
+        await Client().CompleteAsync<Answer>(Prompt, ChatUrgency.Interactive);
+
+        Assert.Equal(0.0000019m, _usage.TotalCost);
+    }
+
+    /// <summary>Without BYOK the upstream cost is already part of "cost"; adding it again would double-count.</summary>
+    [Fact]
+    public async Task A_non_byok_call_counts_cost_once()
+    {
+        _http.Then(HttpStatusCode.OK, JsonSerializer.Serialize(new
+        {
+            choices = new[] { new { finish_reason = "stop", message = new { content = """{"title":"t","tags":[]}""" } } },
+            usage = new { cost = 0.00002m, is_byok = false, cost_details = new { upstream_inference_cost = 0.00002m } },
+        }));
+
+        await Client().CompleteAsync<Answer>(Prompt, ChatUrgency.Interactive);
+
+        Assert.Equal(0.00002m, _usage.TotalCost);
+    }
+
     [Fact]
     public async Task An_upstream_error_mid_answer_is_retried()
     {

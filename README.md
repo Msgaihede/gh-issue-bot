@@ -84,7 +84,8 @@ flowchart TD
 - A Discord application with a bot token, and **User Install** enabled under
   *Installation* in the [Developer Portal](https://discord.com/developers/applications)
 - An [OpenRouter API key](https://openrouter.ai/keys) — put a monthly credit
-  limit on it; that is the hard cap on spend
+  limit on it, or, if your provider keys are BYOK behind OpenRouter, set the
+  budget limits on the OpenAI and TypeSafe accounts instead
 - GitHub credentials per repository: a personal access token **or** a GitHub
   App installation
 

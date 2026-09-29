@@ -54,8 +54,8 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
             {
                 var usage = scope.ServiceProvider.GetRequiredService<AiUsageMeter>();
                 logger.LogInformation(
-                    "Repository map of {Repo}: {Summarized} file(s) summarized, {Removed} removed, {State}; AI cost ${Cost}.",
-                    app.Repo, result.Summarized, result.Removed, result.Complete ? "complete" : "catching up", usage.TotalCost);
+                    "Repository map of {Repo}: {Summarized} file(s) summarized, {Removed} removed, {State}; AI usage {Usage}.",
+                    app.Repo, result.Summarized, result.Removed, result.Complete ? "complete" : "catching up", usage);
             }
 
             return result.Complete;
