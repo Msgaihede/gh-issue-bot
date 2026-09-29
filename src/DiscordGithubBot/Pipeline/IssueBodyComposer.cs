@@ -5,8 +5,8 @@ namespace DiscordGithubBot.Pipeline;
 
 /// <summary>
 /// Builds the markdown body posted to GitHub for a report: the normalized draft, an optional
-/// screenshot gallery, an optional note about screenshots that failed to upload, and a footer crediting
-/// the Discord reporter and the server they reported from.
+/// screenshot gallery, an optional note about screenshots that failed to upload, an optional block of
+/// relevant code and docs, and a footer crediting the Discord reporter and the server they reported from.
 /// A hidden <see cref="MetaMarker"/> sits between the draft and everything appended to it.
 /// </summary>
 public static class IssueBodyComposer
@@ -33,10 +33,15 @@ public static class IssueBodyComposer
     /// <param name="guildName">Discord server the report came from; omitted from the footer when blank.</param>
     /// <param name="images">Screenshots that uploaded successfully; rendered as a gallery.</param>
     /// <param name="failedUploads">File names of screenshots that could not be uploaded.</param>
+    /// <param name="codeContext">
+    /// The relevant-code block, already markdown; after the marker, because it is the bot's reading of the
+    /// repository, not the reporter's words — and two reports about different bugs in the same file must not
+    /// look alike to the duplicate finder for it.
+    /// </param>
     public static string ComposeIssueBody(
         string draftBody, string reporterDisplayName, string guildName,
-        IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
-        Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, FooterVerb.Created);
+        IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads, string? codeContext = null) =>
+        Compose(draftBody, reporterDisplayName, guildName, images, failedUploads, codeContext, FooterVerb.Created);
 
     /// <summary>
     /// Composes the body of a comment added to an existing issue. The first parameter is what the
@@ -47,14 +52,15 @@ public static class IssueBodyComposer
     public static string ComposeCommentBody(
         string additionalInfo, string reporterDisplayName, string guildName,
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
-        Compose(additionalInfo, reporterDisplayName, guildName, images, failedUploads, FooterVerb.AlsoReported);
+        Compose(additionalInfo, reporterDisplayName, guildName, images, failedUploads, null, FooterVerb.AlsoReported);
 
     /// <summary>How the footer credits the reporter: issues are created, comments are further reports.</summary>
     private enum FooterVerb { Created, AlsoReported }
 
     private static string Compose(
         string draftBody, string reporterDisplayName, string guildName,
-        IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads, FooterVerb verb)
+        IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads, string? codeContext,
+        FooterVerb verb)
     {
         var sb = new StringBuilder();
 
@@ -83,6 +89,8 @@ public static class IssueBodyComposer
                 sb,
                 "> [!NOTE]\n> Screenshot upload failed for: " +
                 $"{string.Join(", ", failedUploads.Select(Escape))}.");
+
+        if (!string.IsNullOrWhiteSpace(codeContext)) AppendBlock(sb, codeContext.Trim());
 
         AppendBlock(sb, Footer(reporterDisplayName, guildName, verb));
 

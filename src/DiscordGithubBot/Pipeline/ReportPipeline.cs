@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
@@ -53,7 +54,7 @@ public interface IReportPipeline
     /// <summary>Modal submit -> type -> normalized draft -> dedup verdict. Persists a PendingReport and returns the routed outcome.</summary>
     Task<ReportOutcome> ProcessAsync(ReportSubmission submission, CancellationToken ct = default);
 
-    /// <summary>Confirm-create: uploads images, creates the GitHub issue, deletes the pending report.</summary>
+    /// <summary>Confirm-create: uploads images, adds code context, creates the GitHub issue, deletes the pending report.</summary>
     /// <exception cref="ExpiredPendingReportException"/>
     Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default);
 
@@ -85,6 +86,7 @@ public sealed class ReportPipeline(
     IGitHubService gitHub,
     IImageUploader imageUploader,
     IAdditionalInfoExtractor extractor,
+    ICodeContextBuilder codeContext,
     AiUsageMeter usage,
     BotOptions options,
     ILogger<ReportPipeline> logger) : IReportPipeline
@@ -173,15 +175,23 @@ public sealed class ReportPipeline(
 
         try
         {
-            var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
+            // Code context is generated here, when the reporter confirms, and not at submit time: it is
+            // written into the GitHub issue only (never shown in Discord), and a report that turns out to be
+            // a duplicate or is cancelled never pays for it. It runs alongside the uploads; WhenAll waits for
+            // both even when one fails, so the claim release below never races the database.
+            var uploading = UploadAttachmentsAsync(app, report, ct);
+            var enriching = codeContext.BuildAsync(app, new IssueDraft(report.DraftTitle, report.DraftBody), ct);
+            await Task.WhenAll(uploading, enriching);
+            var (images, failedUploads) = await uploading;
 
             var body = IssueBodyComposer.ComposeIssueBody(
-                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads);
+                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads, await enriching);
             var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, Labels(report), ct);
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Created issue #{Number} in {Repo} for {Reporter}.", issue.Number, app.Repo, report.ReporterDisplayName);
+                "Created issue #{Number} in {Repo} for {Reporter}; AI cost ${Cost} in {Calls} call(s).",
+                issue.Number, app.Repo, report.ReporterDisplayName, usage.TotalCost, usage.Calls);
             return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch

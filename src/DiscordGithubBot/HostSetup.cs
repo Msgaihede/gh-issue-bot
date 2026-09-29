@@ -1,4 +1,5 @@
 using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.Discord;
@@ -89,6 +90,8 @@ public static class HostSetup
         services.AddScoped<IDraftReviewer, DraftReviewer>();
         services.AddScoped<IDuplicateFinder, DuplicateFinder>();
         services.AddScoped<IAdditionalInfoExtractor, AdditionalInfoExtractor>();
+        services.AddScoped<IRepoMapService, RepoMapService>();
+        services.AddScoped<ICodeContextBuilder, CodeContextBuilder>();
         services.AddScoped<IIssueSyncService, IssueSyncService>();
         services.AddScoped<IPendingReportStore, PendingReportStore>();
         services.AddScoped<IReportPipeline, ReportPipeline>();
@@ -104,6 +107,7 @@ public static class HostSetup
             sp.GetRequiredService<DiscordSocketClient>(), BotService.CreateConfig()));
         services.AddHostedService<BotService>();
         services.AddHostedService<MaintenanceService>();
+        services.AddHostedService<RepoMapWorker>();
         return services;
     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
@@ -21,6 +22,7 @@ public class ReportPipelineTests
     private readonly IGitHubService _gitHub = Substitute.For<IGitHubService>();
     private readonly IImageUploader _uploader = Substitute.For<IImageUploader>();
     private readonly IAdditionalInfoExtractor _extractor = Substitute.For<IAdditionalInfoExtractor>();
+    private readonly ICodeContextBuilder _codeContext = Substitute.For<ICodeContextBuilder>();
     private readonly ReportPipeline _sut;
 
     private static readonly AppConfig App = new()
@@ -32,7 +34,7 @@ public class ReportPipelineTests
     public ReportPipelineTests()
     {
         _sut = new ReportPipeline(_classifier, _normalizer, _reviewer, _sync, _finder, _store, _gitHub, _uploader, _extractor,
-            new AiUsageMeter(), new BotOptions { Apps = [App] }, NullLogger<ReportPipeline>.Instance);
+            _codeContext, new AiUsageMeter(), new BotOptions { Apps = [App] }, NullLogger<ReportPipeline>.Instance);
         _classifier.ClassifyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ReportType.Bug);
         _normalizer.NormalizeAsync(Arg.Any<ReportType>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -257,6 +259,34 @@ public class ReportPipelineTests
                 && b.Contains("_Created by **markus** in Discord server **Acme HQ**._")),
             Arg.Is<IReadOnlyList<string>>(l => l.SequenceEqual(new[] { "bug", "android" })), Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CreateIssue_appends_the_code_context_built_from_the_draft()
+    {
+        var id = Guid.NewGuid();
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
+        _codeContext.BuildAsync(App, Arg.Is<IssueDraft>(d => d.Title == "T" && d.Body == "B"), Arg.Any<CancellationToken>())
+            .Returns("### Relevant code\n- `src/a.cs`");
+        _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubIssue(101, "T", "B", "open", DateTime.UtcNow, null, "https://gh/101"));
+
+        await _sut.CreateIssueAsync(id);
+
+        await _gitHub.Received(1).CreateIssueAsync(App, "T", Arg.Is<string>(b => b.Contains("### Relevant code")),
+            Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Code context is written at confirmation, so drafting, duplicates and cancels never pay for it.</summary>
+    [Fact]
+    public async Task Drafting_a_report_never_builds_code_context()
+    {
+        SetupOpenIssues(Open(1));
+        SetupVerdict(VerdictKind.Match, match: 1, shortlist: [1]);
+
+        await _sut.ProcessAsync(Submission());
+
+        await _codeContext.DidNotReceiveWithAnyArgs().BuildAsync(default!, default!, default);
     }
 
     [Fact]

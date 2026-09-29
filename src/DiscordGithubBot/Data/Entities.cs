@@ -80,6 +80,41 @@ public class PendingAttachment
     public required byte[] Bytes { get; set; }
 }
 
+/// <summary>
+/// One source file in a repository's map: where it is, which version was read, and a one-line account of
+/// what it is responsible for. The map is what the decision model reads to find the files a report is
+/// about, so no report ever has to read the code base itself.
+/// </summary>
+public class RepoFile
+{
+    public int Id { get; set; }
+
+    /// <summary>Repository in "owner/repo" form, lowercase.</summary>
+    public required string RepoKey { get; set; }
+
+    public required string Path { get; set; }
+
+    /// <summary>The blob the summary describes; a changed file has a new blob and is summarized again.</summary>
+    public required string BlobSha { get; set; }
+
+    /// <summary>What the file does, in at most ~25 words; "" for a file that could not be read as text.</summary>
+    public string Summary { get; set; } = "";
+}
+
+/// <summary>How far a repository's map has caught up with its default branch.</summary>
+public class RepoMapState
+{
+    public required string RepoKey { get; set; }
+
+    /// <summary>The default-branch commit seen by the latest refresh; code links are pinned to it.</summary>
+    public required string CommitSha { get; set; }
+
+    /// <summary>Whether every source file at <see cref="CommitSha"/> is summarized.</summary>
+    public bool IsComplete { get; set; }
+
+    public DateTime UpdatedAtUtc { get; set; }
+}
+
 /// <summary>When a repository's issues were last synced.</summary>
 public class RepoSyncState
 {

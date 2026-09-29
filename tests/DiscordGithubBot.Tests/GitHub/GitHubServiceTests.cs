@@ -115,6 +115,58 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task The_default_branch_head_comes_from_the_repo_then_the_branch()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "repos/owner/repo/branches/main", HttpStatusCode.OK,
+            """{"commit":{"sha":"c0ffee","commit":{"tree":{"sha":"7ree"}}}}""");
+        fake.When(HttpMethod.Get, "repos/owner/repo", HttpStatusCode.OK, """{"default_branch":"main"}""");
+
+        var head = await Service(fake).GetDefaultBranchHeadAsync(App);
+
+        Assert.Equal(new BranchHead("main", "c0ffee", "7ree"), head);
+    }
+
+    [Fact]
+    public async Task The_tree_lists_blobs_only_and_reports_truncation()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "git/trees/7ree?recursive=1", HttpStatusCode.OK, """
+            {"truncated":true,"tree":[
+              {"path":"src","type":"tree","sha":"d1"},
+              {"path":"src/a.cs","type":"blob","sha":"b1","size":120},
+              {"path":"lib","type":"commit","sha":"m1"}]}
+            """);
+
+        var tree = await Service(fake).GetTreeAsync(App, "7ree");
+
+        Assert.True(tree.Truncated);
+        Assert.Equal(new TreeFile("src/a.cs", "b1", 120), Assert.Single(tree.Files));
+    }
+
+    [Fact]
+    public async Task A_blob_is_decoded_and_cut_to_the_requested_length()
+    {
+        var fake = new FakeHttpMessageHandler();
+        // GitHub wraps base64 content with newlines, which JSON carries as "\n".
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("hello world"));
+        fake.When(HttpMethod.Get, "git/blobs/b1", HttpStatusCode.OK,
+            "{\"encoding\":\"base64\",\"content\":\"" + base64[..8] + "\\n" + base64[8..] + "\"}");
+
+        Assert.Equal("hello", await Service(fake).GetBlobTextAsync(App, "b1", 5));
+    }
+
+    [Fact]
+    public async Task A_binary_blob_reads_as_null()
+    {
+        var fake = new FakeHttpMessageHandler();
+        var base64 = Convert.ToBase64String([0x89, 0x50, 0x00, 0x47]);
+        fake.When(HttpMethod.Get, "git/blobs/b1", HttpStatusCode.OK, $$"""{"encoding":"base64","content":"{{base64}}"}""");
+
+        Assert.Null(await Service(fake).GetBlobTextAsync(App, "b1", 100));
+    }
+
+    [Fact]
     public async Task Failure_status_throws()
     {
         var fake = new FakeHttpMessageHandler();

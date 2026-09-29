@@ -1246,3 +1246,53 @@ below record the choices inside it that are not obvious from the code.
     is counted because that is where it starts to cost. The hard ceiling
     belongs on the OpenRouter key's credit limit, which APP.md tells
     operators to set. `Limits:ReportsPerUserPerDay = 0` turns the cap off.
+
+88. **Code context comes from a repository map, not from reading the
+    repository per report.** The owner asked that issues name the relevant
+    code files and carry context from the code, cheaply. `RepoMapWorker`
+    keeps, per app, one row per source file on the default branch — path,
+    blob SHA, and a ≤25-word summary written by GPT-6 Luna on the flex tier
+    (background urgency: it may wait out the queue). Refreshes are
+    incremental on git's own identity: two GitHub calls when the head has not
+    moved, and otherwise only files whose blob SHA changed are summarized
+    again, in batches of up to 25 files / 60k characters with each file cut
+    to its first 8k. A pass summarizes at most 400 files and the worker
+    returns every 5 minutes (instead of hourly) while a map is incomplete, so
+    a first build of a large repository spreads over a few passes; the map
+    keeps the 2000 shallowest files. A file the model refuses, answers
+    off-schema, or silently skips is stored with an empty summary — it drops
+    out of selection until its blob changes — because asking again would
+    most likely pay for the same failure every pass; only transient failures
+    end a pass for a retry. At "Create issue", `CodeContextBuilder` has Jev
+    shortlist files from the map (the same two-round `Shortlist` helper as
+    dedup, chunks of 150 files), fetches the picks at the exact blob the map
+    summarized, and has Luna say which are really involved and how. The
+    decision model can only offer paths that exist; paths the chat model
+    names that it was not given are dropped. The block goes after the
+    `MetaMarker`, so dedup never reads it, with links pinned to the mapped
+    commit. It is written into GitHub only — never the Discord preview —
+    because anyone who can run the bot (now: anyone who installs it) is not
+    necessarily allowed to read a private repository's code; and it is built
+    at confirmation rather than at submit, so duplicates and cancellations
+    never pay for it. Degradation: a failed notes call still lists the
+    picked files with their map summaries ("Possibly relevant", flagged as
+    unread); a failed selection files the issue without the block.
+
+89. **Markdown docs are mapped alongside code, with their own selection.**
+    From the owner: repositories keep useful context in `.md` files.
+    `.md`/`.mdx`/`.markdown`/`.rst`/`.adoc` files are mapped (summaries say
+    what each doc explains), except licence and code-of-conduct files and
+    anything under excluded directories such as `.github` or
+    `node_modules`. Code and docs are selected in two separate `choice`
+    rounds — up to 4 code files, up to 2 docs — because in one shared
+    ranking a wordy, broadly-on-topic doc can take the place of the file
+    that actually needs fixing. The issue shows them as "Relevant code" and
+    "Related docs". The kind is derived from the path, so the map stores
+    nothing extra.
+
+90. **Code context reads the issue repository itself; there is no separate
+    "code repo" setting.** A split setup — public issue tracker, private
+    code — is common, but code notes about a private repository written into
+    a public tracker would publish private code. Mapping only `Repo` keeps
+    the notes exactly as visible as the code they describe. Supporting a
+    separate code repository would need a visibility check first.

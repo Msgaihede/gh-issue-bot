@@ -130,6 +130,21 @@ public class IssueBodyComposerTests
         Assert.Contains("![b.png](https://x/b)", body);
     }
 
+    /// <summary>
+    /// The code block is the bot's reading of the repository, so it sits behind the marker: two reports about
+    /// different bugs in the same file must not look alike to the duplicate finder because of it.
+    /// </summary>
+    [Fact]
+    public void Code_context_goes_behind_the_marker_and_before_the_footer()
+    {
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], [], "### Relevant code\n- `src/a.cs`");
+
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        var code = body.IndexOf("### Relevant code", StringComparison.Ordinal);
+        Assert.True(code > marker);
+        Assert.True(code < body.IndexOf("_Created by", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Failed_uploads_are_noted()
     {

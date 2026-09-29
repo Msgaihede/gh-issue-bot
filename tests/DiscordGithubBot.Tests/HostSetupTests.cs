@@ -39,6 +39,8 @@ public class HostSetupTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IReportPipeline>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IIssueSyncService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IPendingReportStore>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<DiscordGithubBot.CodeContext.IRepoMapService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<DiscordGithubBot.CodeContext.ICodeContextBuilder>());
     }
 
     /// <summary>
