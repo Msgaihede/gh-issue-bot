@@ -1525,3 +1525,24 @@ below record the choices inside it that are not obvious from the code.
      eight at a time, a chunk at once, so a pass that stops on a model
      failure has not read the rest of its files for nothing. Not measured
      live yet: the next first build's pass lines will show the new rate.
+
+103. **One map check takes every changed file, four batches at once, and
+     checks never overlap.** Supersedes decision 94's 400-file passes and its
+     "10 minutes after the previous check ends". The owner's call: the
+     startup check should update everything that changed in one go, and the
+     10-minute schedule should hold — a tick that finds the previous check
+     still running is skipped and logged, and the next tick tries again.
+     Only changed files are read: the blob-SHA comparison is unchanged. The
+     worker drives a `PeriodicTimer` (first check immediately) and starts each
+     check with `Task.Run` through `NonOverlappingRunner`, so the startup
+     build never sits on the host's startup path. Batches are now planned up
+     front from the tree's byte counts (an upper bound on each file's
+     characters once cut to 8,000), which is what lets four run at once
+     (`SummaryConcurrency`); blob fetches share one limit of eight across
+     them, and the database context, which is not thread-safe, is written by
+     one batch at a time. Each batch is still saved as it lands, so a check
+     that fails part-way keeps its work; a transient failure lets running
+     batches land but starts no new one, where the old loop went straight into
+     another pass. Four is a guess at a safe level for the flex queue, not a
+     measurement; a long check logs progress every 100 files so the next
+     first build shows the real rate.

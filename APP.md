@@ -121,19 +121,23 @@ starts from the right place:
   generated or minified code, assets, lock files, `.github/`, licences and
   codes of conduct are left out, as is anything over 200 KB; a repository with
   more than 2000 such files keeps the shallowest 2000. The worker checks
-  every app **at startup and then every 10 minutes**: it asks GitHub for the
-  default branch's head (two calls when nothing changed) and summarizes every
-  file added or changed since the last check — compared by git blob SHA, so an
-  edit is never missed — and drops deleted ones. A check runs until the map is
-  complete, so the startup check is the whole first build (saved every 400
-  files, each such pass logging how many files it summarized and how many
-  are left). Summaries run at reasoning `low` whatever `ReasoningEffort`
-  says, and file contents are fetched eight at a time: at `medium` with one
-  fetch at a time, mtg-grimoire's ~1,550 files took about 35 minutes. A request
-  OpenRouter refuses outright (credits exhausted, bad key) ends the check
-  without losing anything; the next check picks up where it stopped. Reports
-  filed within 10 minutes of a push can still see the previous version of the
-  files it changed.
+  every app **at startup and then every 10 minutes**, on a background thread:
+  it asks GitHub for the default branch's head (two calls when nothing
+  changed) and summarizes every file added or changed since the last check —
+  compared by git blob SHA, so an edit is never missed and an unchanged file
+  is never paid for twice — and drops deleted ones. One check takes all the
+  changed files, however many, so the startup check is the whole first build.
+  Checks never overlap: a 10-minute tick that finds the previous check still
+  running is skipped (and logged), and the next tick tries again. Files go to
+  the model in batches of up to 25 (60k characters), four batches at once,
+  each saved as it lands; file contents are fetched eight at a time, and
+  summaries run at reasoning `low` whatever `ReasoningEffort` says. (One batch
+  at a time, at `medium`, with one fetch at a time, mtg-grimoire's ~1,550
+  files took about 35 minutes.) A request OpenRouter refuses outright
+  (credits exhausted, bad key) or a transient failure starts no further
+  batches and loses nothing already saved; the next check picks up where it
+  stopped. Reports filed within 10 minutes of a push can still see the
+  previous version of the files it changed.
 - **Embeddings.** Every summary (with its path) is also embedded with
   `voyageai/voyage-4`, so files can be found by meaning, not only by shared
   words. A changed summary gets a new vector; each check embeds whatever lacks
@@ -338,9 +342,10 @@ to Discord as …". After that, expect:
   … "title", labels …; no duplicate …`, then `Code context for report
   1a2b3c4d … ready`, then `Created issue #684 … <url>`, `Commented on …` or
   `Report 1a2b3c4d was cancelled` — each with its AI usage;
-- per repository-map pass that has work: how many files are new or changed
-  and how many this pass takes, then how many it summarized and how many are
-  left; per check with work, one summary line with its duration and cost.
+- per repository-map check that has work: how many files are new or changed,
+  progress every 100 files, how many were summarized, then one summary line
+  with its duration and cost — or that a tick was skipped because the
+  previous check is still running.
 
 To see more, raise a category with an environment variable, e.g.
 `Logging__LogLevel__DiscordGithubBot=Debug` (every model call with its
