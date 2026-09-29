@@ -54,6 +54,20 @@ public static class IssueBodyComposer
         IReadOnlyList<UploadedImage> images, IReadOnlyList<string> failedUploads) =>
         Compose(additionalInfo, reporterDisplayName, guildName, images, failedUploads, null, FooterVerb.AlsoReported);
 
+    /// <summary>
+    /// Swaps the bot's part of an issue body for a newly composed one: <paramref name="currentBody"/> up to
+    /// its first marker — the report as the issue reads now, edits included — followed by
+    /// <paramref name="composedBody"/> from its marker on. Null when the current body has no marker any
+    /// more: whoever removed it rewrote the body, and the bot has no part of it left to replace.
+    /// </summary>
+    public static string? ReplaceBoilerplate(string currentBody, string composedBody)
+    {
+        var cut = currentBody.IndexOf(MetaMarker, StringComparison.Ordinal);
+        if (cut < 0) return null;
+
+        return currentBody[..cut] + composedBody[composedBody.IndexOf(MetaMarker, StringComparison.Ordinal)..];
+    }
+
     /// <summary>How the footer credits the reporter: issues are created, comments are further reports.</summary>
     private enum FooterVerb { Created, AlsoReported }
 

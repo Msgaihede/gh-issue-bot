@@ -89,15 +89,17 @@ publicly in the app's configured channel(s).
    first — with the classified type and the chosen labels in small print
    above the title — behind **Create issue** / **Cancel**. The duplicate path
    confirms against the matched issue instead.
-9. **Create or comment.** The **code context** (see below) was started in the
-   background the moment the preview appeared, so it is usually ready by the
-   time the reporter clicks; if not, the click waits for the rest of it while
-   the screenshots upload to GitHub. The body then gets
-   a `### Screenshots` gallery, the "Relevant code" / "Related docs" block,
-   and a `_Created by **<name>** in Discord server **<server>**._` footer
-   (`via Discord` when the server is unknown — a DM, or a server the bot is
-   not in). The issue gets the chosen labels, a public announcement posts in
-   the app's channel(s), and the reporter gets an ephemeral confirmation. On
+9. **Create or comment.** The screenshots upload to GitHub and the issue is
+   created at once, with a `### Screenshots` gallery, the "Relevant code" /
+   "Related docs" block, and a `_Created by **<name>** in Discord server
+   **<server>**._` footer (`via Discord` when the server is unknown — a DM,
+   or a server the bot is not in). The **code context** (see below) was
+   started in the background the moment the preview appeared; when it is not
+   finished yet the click does not wait for it — the issue is created
+   without the block and the bot **edits it into the issue body** once it is
+   built (never as a comment, so the body alone carries everything). The
+   issue gets the chosen labels, the reporter gets an ephemeral confirmation,
+   and then a public announcement posts in the app's channel(s). On
    comment: screenshots upload the same way, and the comment carries only
    what the report adds to the issue (GPT-6 Luna compares the draft with the
    cached issue text) above an `_Also reported by …_` footer — or that footer
@@ -151,12 +153,16 @@ starts from the right place:
   one — which is also how an existing map, or a switch of embedding model,
   catches up (a 1,551-file map cost $0.0035 to embed).
 - **While the reporter reads the preview.** The code context is for
-  maintainers, so the preview does not wait for it: it starts in the
-  background as soon as the preview is shown and is saved with the draft. On
-  "Create issue" it is usually ready (measured: the preview in ~5 s, the code
-  context ~20–25 s later on flex), so creating takes a few seconds; a
-  reporter who clicks sooner waits only for the remainder, and a draft that
-  outlived a bot restart gets its code context built at the click. It is built
+  maintainers, so neither the preview nor the click waits for it: it starts
+  in the background as soon as the preview is shown and is saved with the
+  draft (measured: the preview in ~5 s, the code context ~20–25 s later on
+  flex). A reporter who clicks "Create issue" after that gets the block in
+  the issue straight away; one who clicks sooner gets the issue at once and
+  the block ~20 s later, as an edit of the issue body that re-reads the issue
+  and replaces only what follows the hidden marker (so a quick edit to the
+  report text survives it). A draft that outlived a bot restart has its code
+  context built after the click the same way; a bot restart or GitHub
+  failure during that edit leaves the issue without the block. It is built
   for every draft, duplicates and cancelled ones included (~$0.002 each).
   Reporters rarely use the code's vocabulary ("nothing comes up" rather than
   `fts_query`), so finding the files is two-sided:
@@ -626,7 +632,11 @@ configured app. Enable **User Install** in the Developer Portal first.
    app's channel(s); and that everything in the command channel was
    ephemeral. The preview turns into "⏳ Working on it…" and then into the
    "✅ Created #N" confirmation — one message throughout, no second one below
-   it. The log line for the creation states the AI cost.
+   it. The log line for the creation states the AI cost. Repeat, clicking
+   *Create issue* within a few seconds of the preview: the confirmation comes
+   as quickly, the log says "code context to follow", and ~20 s later "Added
+   code context to issue #N" — the issue body (not a comment) now has the
+   "Relevant code" block, shown as edited.
 4. **Feature path.** Run `/issue` with a feature request; the preview says
    "Feature request" and uses the Summary / Motivation / Proposed Solution
    template.
