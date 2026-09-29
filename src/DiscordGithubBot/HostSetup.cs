@@ -95,6 +95,7 @@ public static class HostSetup
         services.AddScoped<IRepoMapService, RepoMapService>();
         services.AddScoped<ICodeContextBuilder, CodeContextBuilder>();
         services.AddSingleton<ICodeContextPrefetcher, CodeContextPrefetcher>();
+        services.AddSingleton<ICodeContextFollowUp, CodeContextFollowUp>();
         services.AddScoped<DiscordGithubBot.CodeContext.Retrieval.IQueryExpander, DiscordGithubBot.CodeContext.Retrieval.QueryExpander>();
         services.AddScoped<IIssueSyncService, IssueSyncService>();
         services.AddScoped<IPendingReportStore, PendingReportStore>();

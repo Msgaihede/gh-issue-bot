@@ -1566,3 +1566,29 @@ below record the choices inside it that are not obvious from the code.
      reporter still learns an issue was created. The modal submit keeps
      `FollowupAsync`: its first follow-up already fills the deferred
      "thinking" message.
+
+## 2026-09-29 (create without waiting)
+
+105. **"Create issue" no longer waits for the code context; a late block is
+     edited into the issue body, never commented.** Amends decision 98. A
+     reporter who clicked soon after the preview still waited up to ~25 s
+     for the background build, and the announcement went out before their
+     answer. Now the click uploads the screenshots and creates the issue at
+     once; when `CodeContextPrefetcher.TryGetReady` says the block is done
+     (stored, or finished in memory) it ships in the issue as before, and
+     otherwise `CodeContextFollowUp` (a singleton, its own DI scope) awaits
+     the build and edits it in. The owner ruled out a comment: an agent
+     handed the issue reads only its body. The edit re-reads the issue and
+     keeps everything before the first `MetaMarker` as it now reads,
+     replacing only the boilerplate after it, so a maintainer's quick edit of
+     the report text survives; a body whose marker is gone is left alone.
+     Screenshots stay on the click, not the edit (the owner's pick): they
+     take about a second each, they are the reporter's own evidence, and a
+     restart mid-edit then costs only the code context — the same outcome as
+     a failed build — so nothing new has to survive a restart and the schema
+     is unchanged. Uploads stay sequential: in parallel, two first uploads
+     to a repo could both try to create the `issue-assets` fallback branch.
+     The reporter's confirmation now comes before the channel announcement,
+     which still goes out if answering fails. The duplicate-comment path is
+     unchanged — its comment *is* the model's extraction, so there is nothing
+     to post early.

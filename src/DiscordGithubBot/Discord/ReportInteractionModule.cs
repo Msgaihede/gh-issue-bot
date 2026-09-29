@@ -201,11 +201,18 @@ public class ReportInteractionModule(
 
         var issue = await pipeline.CreateIssueAsync(id);
 
-        var app = options.AppByRepo(pending.RepoKey);
-        if (app is null) logger.LogWarning("No app configured for {Repo}; skipping the announcement.", pending.RepoKey);
-        else await AnnounceAsync(app, issue, pending.Type, pending.ReporterDisplayName);
-
-        await AnswerClickAsync(OutcomeRenderer.RenderCreated(issue));
+        // The reporter is answered first — the announcement is for everyone else and need not hold them up —
+        // and the issue is announced even when answering fails, since it exists either way.
+        try
+        {
+            await AnswerClickAsync(OutcomeRenderer.RenderCreated(issue));
+        }
+        finally
+        {
+            var app = options.AppByRepo(pending.RepoKey);
+            if (app is null) logger.LogWarning("No app configured for {Repo}; skipping the announcement.", pending.RepoKey);
+            else await AnnounceAsync(app, issue, pending.Type, pending.ReporterDisplayName);
+        }
     });
 
     [ComponentInteraction("rep|cancel|*|*", runMode: RunMode.Sync)]

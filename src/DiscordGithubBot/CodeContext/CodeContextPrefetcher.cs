@@ -21,6 +21,13 @@ public interface ICodeContextPrefetcher
     /// restarted in between). Null when there is nothing worth adding. Never throws on a model failure.
     /// </summary>
     Task<string?> GetAsync(PendingReport report, AppConfig app, CancellationToken ct = default);
+
+    /// <summary>
+    /// The code context when it is already there — stored on the report, or built in memory since the report
+    /// was read — without waiting for it. False while the build is running, and after a restart that lost it.
+    /// </summary>
+    /// <param name="codeContext">the block, or null when the build found nothing worth adding</param>
+    bool TryGetReady(PendingReport report, out string? codeContext);
 }
 
 /// <summary>
@@ -55,6 +62,22 @@ public sealed class CodeContextPrefetcher(IServiceScopeFactory scopes, ILogger<C
         await using var scope = scopes.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<ICodeContextBuilder>()
             .BuildAsync(app, new IssueDraft(report.DraftTitle, report.DraftBody), ct);
+    }
+
+    public bool TryGetReady(PendingReport report, out string? codeContext)
+    {
+        codeContext = null;
+        if (report.CodeContextReadyAtUtc is not null)
+        {
+            codeContext = EmptyAsNull(report.CodeContext);
+            return true;
+        }
+
+        // A background build never faults (a failure is null), so a completed one has a result to hand over.
+        if (!_builds.TryGetValue(report.Id, out var running) || !running.Build.IsCompletedSuccessfully) return false;
+
+        codeContext = running.Build.Result;
+        return true;
     }
 
     private async Task<string?> BuildAndStoreAsync(Guid pendingReportId, AppConfig app, IssueDraft draft)

@@ -68,7 +68,10 @@ public interface IReportPipeline
     /// <exception cref="NormalizationException"/>
     Task<ReportAnalysis> AnalyzeAsync(AppConfig app, string rawText, CancellationToken ct = default);
 
-    /// <summary>Confirm-create: uploads images, adds code context, creates the GitHub issue, deletes the pending report.</summary>
+    /// <summary>
+    /// Confirm-create: uploads images, creates the GitHub issue, deletes the pending report. The code context goes
+    /// into the issue when it is ready, and is edited in after it by the follow-up when it is not.
+    /// </summary>
     /// <exception cref="ExpiredPendingReportException"/>
     Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default);
 
@@ -101,6 +104,7 @@ public sealed class ReportPipeline(
     IImageUploader imageUploader,
     IAdditionalInfoExtractor extractor,
     ICodeContextPrefetcher codeContext,
+    ICodeContextFollowUp codeContextFollowUp,
     AiUsageMeter usage,
     BotOptions options,
     ILogger<ReportPipeline> logger) : IReportPipeline
@@ -199,24 +203,24 @@ public sealed class ReportPipeline(
 
         try
         {
-            // The code context was started in the background when the preview was shown, and is written into
-            // the GitHub issue only (never shown in Discord). Usually it is ready; if the reporter was quick it
-            // is awaited here, alongside the uploads. WhenAll waits for both even when one fails, so the claim
-            // release below never races the database.
-            var uploading = UploadAttachmentsAsync(app, report, ct);
-            var enriching = codeContext.GetAsync(report, app, ct);
-            await Task.WhenAll(uploading, enriching);
-            var (images, failedUploads) = await uploading;
+            var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
+            string Compose(string? context) => IssueBodyComposer.ComposeIssueBody(
+                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads, context);
 
-            var body = IssueBodyComposer.ComposeIssueBody(
-                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads, await enriching);
-            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, Labels(report), ct);
+            // The code context was started in the background when the preview was shown, and is written into
+            // the GitHub issue only (never shown in Discord). A reporter who read the preview for a while finds it
+            // done and it ships with the issue; a quicker one is not kept waiting for it — the issue is created
+            // without it and the follow-up edits it into the body once it is built.
+            var ready = codeContext.TryGetReady(report, out var context);
+            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, Compose(context), Labels(report), ct);
+            if (!ready) _ = codeContextFollowUp.Start(report, app, issue.Number, Compose);
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Created issue #{Number} in {Repo} from report {ReportId} by {Reporter} ({Images} image(s){Failed}): {Url}; AI usage {Usage}.",
+                "Created issue #{Number} in {Repo} from report {ReportId} by {Reporter} ({Images} image(s){Failed}{CodeContext}): {Url}; AI usage {Usage}.",
                 issue.Number, app.Repo, ShortId(pendingReportId), report.ReporterDisplayName, images.Count,
-                failedUploads.Count == 0 ? "" : $", {failedUploads.Count} failed", issue.HtmlUrl, usage);
+                failedUploads.Count == 0 ? "" : $", {failedUploads.Count} failed",
+                ready ? "" : ", code context to follow", issue.HtmlUrl, usage);
             return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch
