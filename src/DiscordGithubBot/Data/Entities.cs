@@ -97,6 +97,12 @@ public class RepoFile
     /// <summary>The blob the summary describes; a changed file has a new blob and is summarized again.</summary>
     public required string BlobSha { get; set; }
 
+    /// <summary>
+    /// A commit at which the file had <see cref="BlobSha"/> — the one it was read at. Code links pin to it, so a
+    /// link always shows the version the summary and the notes describe, even while the map catches up.
+    /// </summary>
+    public string CommitSha { get; set; } = "";
+
     /// <summary>What the file does, in at most ~25 words; "" for a file that could not be read as text.</summary>
     public string Summary { get; set; } = "";
 }
@@ -106,7 +112,7 @@ public class RepoMapState
 {
     public required string RepoKey { get; set; }
 
-    /// <summary>The default-branch commit seen by the latest refresh; code links are pinned to it.</summary>
+    /// <summary>The default-branch commit the latest refresh worked towards.</summary>
     public required string CommitSha { get; set; }
 
     /// <summary>Whether every source file at <see cref="CommitSha"/> is summarized.</summary>

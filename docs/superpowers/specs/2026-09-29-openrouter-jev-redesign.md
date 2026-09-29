@@ -152,7 +152,8 @@ prints the decisions, the cost, and each decision's raw probabilities.
   to Luna, which returns per-file relevance notes ("Relevant code", "Related
   docs"). Paths it names that were not provided are dropped; if it fails, the
   picks are listed with their map summaries. The block is appended after the `MetaMarker`,
-  so it never feeds dedup, with blob links pinned to the mapped commit.
+  so it never feeds dedup, with each link pinned to the commit its file was
+  read at.
 - **Never in Discord:** generated at "Create issue" time and written only to
   GitHub, so a Discord reporter (any installer, now) cannot use the bot to
   read a private repo's code. Any failure → the issue is created without it.

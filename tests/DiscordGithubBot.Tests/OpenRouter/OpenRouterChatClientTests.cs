@@ -143,6 +143,18 @@ public class OpenRouterChatClientTests
     }
 
     [Fact]
+    public async Task An_upstream_error_mid_answer_is_retried()
+    {
+        _http.Then(HttpStatusCode.OK, Completion(new Answer("t", []), finishReason: "error"))
+            .Then(HttpStatusCode.OK, Completion(new Answer("ok", [])));
+
+        var answer = await Client().CompleteAsync<Answer>(Prompt, ChatUrgency.Interactive);
+
+        Assert.Equal("ok", answer.Title);
+        Assert.Equal(2, _http.Requests.Count);
+    }
+
+    [Fact]
     public async Task Content_outside_the_schema_is_a_failure()
     {
         _http.Then(HttpStatusCode.OK, JsonSerializer.Serialize(new

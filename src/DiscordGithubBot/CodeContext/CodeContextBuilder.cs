@@ -207,7 +207,8 @@ public sealed class CodeContextBuilder(
     /// With notes, the files the chat model found involved, each with its note. Without notes, every picked
     /// file with its map summary — the decision model's pick is still useful to a maintainer on its own.
     /// </summary>
-    private static string? Compose(AppConfig app, string commitSha, IReadOnlyList<RepoFile> chosen, CodeNotesDto? notes)
+    /// <param name="headSha">the head the map last worked towards; the link commit of any row that predates per-row commits</param>
+    private static string? Compose(AppConfig app, string headSha, IReadOnlyList<RepoFile> chosen, CodeNotesDto? notes)
     {
         List<Entry> entries;
         string summaryNotes;
@@ -234,19 +235,18 @@ public sealed class CodeContextBuilder(
         var docs = entries.Where(e => SourceFileFilter.KindOf(e.File.Path) == MapFileKind.Doc).ToList();
 
         var sb = new StringBuilder();
-        AppendSection(sb, notes is null ? "Possibly relevant code" : "Relevant code", code, app, commitSha);
-        AppendSection(sb, notes is null ? "Possibly related docs" : "Related docs", docs, app, commitSha);
+        AppendSection(sb, notes is null ? "Possibly relevant code" : "Relevant code", code, app, headSha);
+        AppendSection(sb, notes is null ? "Possibly related docs" : "Related docs", docs, app, headSha);
         if (summaryNotes.Length > 0) sb.Append(summaryNotes).Append("\n\n");
 
-        var shortSha = commitSha.Length > 7 ? commitSha[..7] : commitSha;
         sb.Append(notes is null
-            ? $"<sub>Picked by AI from the repository map at `{shortSha}`, without reading the files — check before relying on it.</sub>"
-            : $"<sub>Found by AI reading the repository at `{shortSha}` — check before relying on it.</sub>");
+            ? "<sub>Picked by AI from the repository map, without reading the files — check before relying on it.</sub>"
+            : "<sub>Found by AI reading the linked versions of these files — check before relying on it.</sub>");
 
         return sb.ToString();
     }
 
-    private static void AppendSection(StringBuilder sb, string heading, List<Entry> entries, AppConfig app, string commitSha)
+    private static void AppendSection(StringBuilder sb, string heading, List<Entry> entries, AppConfig app, string headSha)
     {
         if (entries.Count == 0) return;
 
@@ -254,7 +254,8 @@ public sealed class CodeContextBuilder(
         foreach (var (file, description) in entries)
         {
             var note = Cut(description.Replace('\r', ' ').Replace('\n', ' ').Trim(), MaxNoteChars);
-            sb.Append("- [`").Append(file.Path.Replace('`', '\'')).Append("`](").Append(BlobUrl(app, commitSha, file.Path)).Append(')');
+            var commit = string.IsNullOrEmpty(file.CommitSha) ? headSha : file.CommitSha;
+            sb.Append("- [`").Append(file.Path.Replace('`', '\'')).Append("`](").Append(BlobUrl(app, commit, file.Path)).Append(')');
             if (note.Length > 0) sb.Append(" — ").Append(note);
             sb.Append('\n');
         }
@@ -262,7 +263,7 @@ public sealed class CodeContextBuilder(
         sb.Append('\n');
     }
 
-    /// <summary>Pinned to the mapped commit, so the link still shows what was read after the file changes.</summary>
+    /// <summary>Pinned to the commit the file was read at, so the link shows exactly what the notes describe.</summary>
     private static string BlobUrl(AppConfig app, string commitSha, string path) =>
         $"https://github.com/{app.Repo}/blob/{commitSha}/{string.Join('/', path.Split('/').Select(Uri.EscapeDataString))}";
 

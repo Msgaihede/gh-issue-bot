@@ -129,6 +129,9 @@ public sealed class OpenRouterChatClient(
 
         if (choice.Message?.Refusal is { Length: > 0 } refusal)
             throw new OpenRouterException($"Chat call {name} was refused: {refusal}", null, isTransient: false);
+        // "error" is the upstream provider failing mid-answer, not the prompt: another attempt can fix it.
+        if (choice.FinishReason == "error")
+            throw new OpenRouterException($"Chat call {name} failed upstream.", null, isTransient: true);
         if (choice.FinishReason is not ("stop" or null))
             throw new OpenRouterException(
                 $"Chat call {name} stopped early ({choice.FinishReason}).", null, isTransient: false);

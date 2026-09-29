@@ -11,6 +11,19 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+// The one-shot modes must never fall through to starting the live bot: a mistyped invocation would
+// otherwise connect to the gateway and answer real interactions next to the production instance.
+if (args is ["--dry-run", ..] and not ["--dry-run", _, _])
+{
+    Console.Error.WriteLine("Usage: --dry-run owner/repo \"report text\" (quote the text)");
+    return 1;
+}
+if (args is ["--smoke-upload", ..] and not ["--smoke-upload", _])
+{
+    Console.Error.WriteLine("Usage: --smoke-upload owner/repo");
+    return 1;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // config layering: appsettings.json + appsettings.{Env}.json + env vars + command line come from

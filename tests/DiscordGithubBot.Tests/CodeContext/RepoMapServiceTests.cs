@@ -118,6 +118,9 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.Equal(1, result.Removed);
         Assert.Equal(["src/a.cs", "src/b.cs"], Rows().Keys.Order());
         Assert.Equal("b2", Rows()["src/b.cs"].BlobSha);
+        // Each row keeps the commit it was read at: the unchanged file's link still shows what was summarized.
+        Assert.Equal("c1", Rows()["src/a.cs"].CommitSha);
+        Assert.Equal("c2", Rows()["src/b.cs"].CommitSha);
         Assert.DoesNotContain("=== src/a.cs", seen[1].User);
         Assert.Equal("c2", _db.RepoMapStates.Single().CommitSha);
     }
@@ -161,6 +164,24 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.False(result.Complete);
         Assert.Empty(Rows());
         Assert.False(_db.RepoMapStates.Single().IsComplete);
+    }
+
+    /// <summary>
+    /// Exhausted credits, a bad key or an unknown model say nothing about the files. Parking them would blank the
+    /// map the moment the credit limit — the intended hard cap — is reached, and keep it blank after a top-up.
+    /// </summary>
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.PaymentRequired)]
+    [InlineData(System.Net.HttpStatusCode.Unauthorized)]
+    [InlineData(System.Net.HttpStatusCode.BadRequest)]
+    public async Task A_request_openrouter_refuses_ends_the_pass_without_parking_anything(System.Net.HttpStatusCode status)
+    {
+        Head("c1", File("src/a.cs", "s1"));
+
+        var result = await Sut(new FakeChat(new OpenRouterException("refused", status, isTransient: false))).RefreshAsync(App);
+
+        Assert.False(result.Complete);
+        Assert.Empty(Rows());
     }
 
     [Fact]

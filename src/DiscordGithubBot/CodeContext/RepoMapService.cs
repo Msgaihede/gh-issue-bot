@@ -32,8 +32,10 @@ public interface IRepoMapService
 /// summarizes at most <see cref="MaxSummariesPerRefresh"/> files, which spreads a first build of a large
 /// repository over several passes (the worker comes back sooner while a map is incomplete). A file the
 /// model cannot or will not summarize is stored with an empty summary — it drops out of selection until
-/// it changes — so no pass can loop on paying for the same failure; a transient failure simply ends the
-/// pass and the next one resumes where it stopped.
+/// it changes — so no pass can loop on paying for the same failure. A transient failure, and any request
+/// OpenRouter refuses outright (a bad key, exhausted credits, an unknown model), simply ends the pass and
+/// the next one resumes where it stopped: those say nothing about the files, and parking them would blank
+/// the map exactly when the operator's credit limit — the intended hard cap — is reached.
 /// </remarks>
 public sealed class RepoMapService(
     BotDbContext db, IGitHubService gitHub, IOpenRouterChat chat, ILogger<RepoMapService> logger) : IRepoMapService
@@ -93,7 +95,8 @@ public sealed class RepoMapService(
             db.RepoFiles.RemoveRange(gone);
             foreach (var row in gone) rows.Remove(row.Path);
 
-            // The head moves first, so code links point at a commit where every mapped path exists.
+            // The state records the head this pass works towards; each row keeps the commit its own summary was
+            // read at, which is what code links pin to.
             if (state is null) db.RepoMapStates.Add(state = new RepoMapState { RepoKey = repoKey, CommitSha = head.CommitSha });
             state.CommitSha = head.CommitSha;
             state.IsComplete = false;
@@ -101,7 +104,8 @@ public sealed class RepoMapService(
             await db.SaveChangesAsync(ct);
 
             var stale = sources.Where(f => !rows.TryGetValue(f.Path, out var r) || r.BlobSha != f.BlobSha).ToList();
-            var summarized = await SummarizeAsync(app, repoKey, stale.Take(MaxSummariesPerRefresh).ToList(), rows, ct);
+            var summarized = await SummarizeAsync(
+                app, repoKey, head.CommitSha, stale.Take(MaxSummariesPerRefresh).ToList(), rows, ct);
 
             state.IsComplete = summarized == stale.Count;
             await db.SaveChangesAsync(ct);
@@ -136,7 +140,8 @@ public sealed class RepoMapService(
 
     /// <returns>How many of <paramref name="files"/> ended the pass with a row matching their blob.</returns>
     private async Task<int> SummarizeAsync(
-        AppConfig app, string repoKey, IReadOnlyList<TreeFile> files, Dictionary<string, RepoFile> rows, CancellationToken ct)
+        AppConfig app, string repoKey, string commitSha, IReadOnlyList<TreeFile> files, Dictionary<string, RepoFile> rows,
+        CancellationToken ct)
     {
         var done = 0;
         var batch = new List<(TreeFile File, string Text)>();
@@ -148,7 +153,7 @@ public sealed class RepoMapService(
             if (text is null || string.IsNullOrWhiteSpace(text))
             {
                 // Binary or empty: nothing to summarize, and nothing to retry until the blob changes.
-                Upsert(repoKey, file, "", rows);
+                Upsert(repoKey, commitSha, file, "", rows);
                 done++;
                 continue;
             }
@@ -157,7 +162,7 @@ public sealed class RepoMapService(
             batchChars += text.Length;
             if (batch.Count < MaxFilesPerBatch && batchChars < MaxCharsPerBatch) continue;
 
-            var flushed = await FlushAsync(app, repoKey, batch, rows, ct);
+            var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
             if (flushed < 0) return done;
             done += flushed;
             batch.Clear();
@@ -166,7 +171,7 @@ public sealed class RepoMapService(
 
         if (batch.Count > 0)
         {
-            var flushed = await FlushAsync(app, repoKey, batch, rows, ct);
+            var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
             if (flushed >= 0) done += flushed;
         }
 
@@ -176,8 +181,8 @@ public sealed class RepoMapService(
 
     /// <returns>Files settled by this batch, or -1 when a transient failure should end the pass.</returns>
     private async Task<int> FlushAsync(
-        AppConfig app, string repoKey, List<(TreeFile File, string Text)> batch, Dictionary<string, RepoFile> rows,
-        CancellationToken ct)
+        AppConfig app, string repoKey, string commitSha, List<(TreeFile File, string Text)> batch,
+        Dictionary<string, RepoFile> rows, CancellationToken ct)
     {
         var user = new StringBuilder($"Repository: {app.Repo}\n\n");
         foreach (var (file, text) in batch) user.Append("=== ").Append(file.Path).Append(" ===\n").Append(text).Append("\n\n");
@@ -188,18 +193,18 @@ public sealed class RepoMapService(
             answer = await chat.CompleteAsync<SummariesDto>(
                 new ChatPrompt("repo_map_summaries", SystemPrompt, user.ToString()), ChatUrgency.Background, ct);
         }
-        catch (OpenRouterException ex) when (ex.IsTransient)
+        catch (OpenRouterException ex) when (ex.IsTransient || ex.Status is not null)
         {
             logger.LogWarning(ex, "Summarizing {Count} files of {Repo} failed; the next pass resumes here.", batch.Count, app.Repo);
             return -1;
         }
         catch (OpenRouterException ex)
         {
-            // A refusal or an off-schema answer will repeat on the same input; paying for it every pass is worse
-            // than leaving these files out of the map until they change.
+            // An answer-level failure — a refusal, a truncated or off-schema answer — will repeat on the same
+            // input; paying for it every pass is worse than leaving these files out until they change.
             logger.LogWarning(ex, "Summarizing {Count} files of {Repo} failed permanently; they stay out of the map until they change.",
                 batch.Count, app.Repo);
-            foreach (var (file, _) in batch) Upsert(repoKey, file, "", rows);
+            foreach (var (file, _) in batch) Upsert(repoKey, commitSha, file, "", rows);
             await db.SaveChangesAsync(ct);
             return batch.Count;
         }
@@ -212,22 +217,23 @@ public sealed class RepoMapService(
         // A file the model skipped is stored unsummarized for the same reason a refusal is: asking again next
         // pass would most likely pay for the same omission.
         foreach (var (file, _) in batch)
-            Upsert(repoKey, file, summaries.TryGetValue(file.Path, out var summary) ? Clean(summary) : "", rows);
+            Upsert(repoKey, commitSha, file, summaries.TryGetValue(file.Path, out var summary) ? Clean(summary) : "", rows);
 
         await db.SaveChangesAsync(ct);
         return batch.Count;
     }
 
-    private void Upsert(string repoKey, TreeFile file, string summary, Dictionary<string, RepoFile> rows)
+    private void Upsert(string repoKey, string commitSha, TreeFile file, string summary, Dictionary<string, RepoFile> rows)
     {
         if (!rows.TryGetValue(file.Path, out var row))
         {
-            row = new RepoFile { RepoKey = repoKey, Path = file.Path, BlobSha = file.BlobSha };
+            row = new RepoFile { RepoKey = repoKey, Path = file.Path, BlobSha = file.BlobSha, CommitSha = commitSha };
             db.RepoFiles.Add(row);
             rows[file.Path] = row;
         }
 
         row.BlobSha = file.BlobSha;
+        row.CommitSha = commitSha;
         row.Summary = summary;
     }
 

@@ -41,7 +41,10 @@ public sealed class CodeContextBuilderTests : IDisposable
     {
         _db.RepoMapStates.Add(new RepoMapState { RepoKey = "owner/repo", CommitSha = Commit, IsComplete = true });
         foreach (var (path, summary) in files)
-            _db.RepoFiles.Add(new RepoFile { RepoKey = "owner/repo", Path = path, BlobSha = "blob-" + path, Summary = summary });
+            _db.RepoFiles.Add(new RepoFile
+            {
+                RepoKey = "owner/repo", Path = path, BlobSha = "blob-" + path, CommitSha = Commit, Summary = summary,
+            });
         _db.SaveChanges();
     }
 
@@ -105,7 +108,25 @@ public sealed class CodeContextBuilderTests : IDisposable
         Assert.Contains("### Related docs", block);
         Assert.Contains("docs/payments.md", block);
         Assert.Contains("The fix likely belongs in PayAsync.", block);
-        Assert.Contains("`abcdef1`", block);
+        Assert.Contains("reading the linked versions", block);
+    }
+
+    /// <summary>
+    /// While the map catches up after a push, a changed file still carries the summary (and blob) of its
+    /// older version; its link must show that version, not the new head the notes were never written from.
+    /// </summary>
+    [Fact]
+    public async Task Each_link_pins_the_commit_its_file_was_read_at()
+    {
+        Map(("src/Checkout.cs", "Checkout flow."));
+        _db.RepoMapStates.Single().CommitSha = "newhead";
+        _db.SaveChanges();
+        var chat = new FakeChat("""{"files":[{"path":"src/Checkout.cs","involved":true,"note":"x"}],"notes":""}""");
+
+        var block = await Sut(Picks(("src/Checkout.cs", 0.9)), chat).BuildAsync(App, Draft);
+
+        Assert.Contains($"blob/{Commit}/src/Checkout.cs", block);
+        Assert.DoesNotContain("newhead", block);
     }
 
     [Fact]
@@ -189,7 +210,7 @@ public sealed class CodeContextBuilderTests : IDisposable
 
         await Sut(decisions, new FakeChat("{}")).BuildAsync(App, Draft);
 
-        Assert.Equal(1, decisions.Calls.Single().State["files"]!.AsObject().Count);
+        Assert.Single(decisions.Calls.Single().State["files"]!.AsObject());
     }
 
     [Fact]

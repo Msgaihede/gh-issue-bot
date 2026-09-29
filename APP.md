@@ -121,14 +121,17 @@ starts from the right place:
   more than 2000 such files keeps the shallowest 2000. The worker checks each
   branch head hourly (two GitHub calls when nothing changed) and summarizes
   only files whose git blob changed. A first build is capped at 400 files per
-  pass and resumes every five minutes until the map is complete.
+  pass and resumes every five minutes until the map is complete. A request
+  OpenRouter refuses outright (credits exhausted, bad key) just ends the pass;
+  the map picks up where it stopped once the key works again.
 - **At "Create issue".** Jev picks up to four code files and, separately, up
   to two docs from the map; the bot reads them at the exact version the map
   summarized; GPT-6 Luna says which are really involved and how, naming
   functions or documented behaviour, plus a short note on where a fix would
   likely go. The result is appended to the issue under "Relevant code" and
-  "Related docs", with links pinned to the mapped commit and a line saying it
-  is AI-generated.
+  "Related docs", each link pinned to the commit its file was read at (so it
+  shows exactly the version the notes describe), and a line saying it is
+  AI-generated.
 - **GitHub only.** The block is never shown in Discord — anyone who can run
   the bot is not necessarily allowed to read a private repository's code — and
   it is built only when an issue is actually created, so duplicates and

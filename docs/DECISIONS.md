@@ -1312,3 +1312,20 @@ below record the choices inside it that are not obvious from the code.
     decision's raw answers appear above the summary. It does update the
     issue cache and the map, which are caches; it never stores a pending
     report or touches Discord or GitHub issues.
+
+92. **Review fixes to the repository map and the CLI (same day).** An
+    independent review of the branch found three defects, all fixed. (a) Any
+    non-transient OpenRouter error used to park a batch as unsummarizable —
+    including request-level refusals (402 credits exhausted, 401 bad key,
+    400 unknown model), which say nothing about the files. Reaching the
+    credit limit, the intended hard cap, would therefore have blanked the
+    map for good. Now only answer-level failures (a refusal, a truncated or
+    off-schema answer) park files; anything carrying an HTTP status ends the
+    pass for a retry, and `finish_reason: "error"` counts as transient.
+    (b) `--dry-run` or `--smoke-upload` with the wrong number of arguments
+    fell through to `host.RunAsync()` and started the live bot; both now
+    print their usage and exit 1 before the host is built. (c) Code links
+    pointed at the latest head while a changed file's summary and blob were
+    still the older version's; each `RepoFile` now records the commit it was
+    read at (schema v5) and its link pins to that, so a link always shows
+    what the notes describe.
