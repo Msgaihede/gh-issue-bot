@@ -28,8 +28,10 @@ is unchanged.
    context in `.md` files (added during implementation).
 
 Settled with the owner: `/issue` + `/issue-install` (Discord forbids a
-runnable `/issue` with subcommands); `/issues` stays. From a user install,
-every configured app is reachable. Only open issues are dedup candidates, so
+runnable `/issue` with subcommands); `/issues` stays, later renamed
+`/list-issues`. From a user install, the apps of the configured servers the
+user is a member of are reachable (at first: every app; decision 101). Only
+open issues are dedup candidates, so
 the "closed recently — still happening?" flow goes. Code context is written
 into the GitHub issue only, never shown in Discord.
 
@@ -170,16 +172,17 @@ prints the decisions, the cost, and each decision's raw probabilities.
 
 - `/issue` (modal, no type), `/issue-install` (ephemeral user-install link:
   `https://discord.com/oauth2/authorize?client_id=<app id>&integration_type=1&scope=applications.commands`),
-  `/issues [app]`.
+  `/list-issues [app]` (renamed from `/issues`, decision 100).
 - Commands are **global** with `integration_types = [guild, user]` and
   `contexts = [guild, bot DM, private channel]`. Legacy per-guild
   registrations are overwritten with an empty set on ready.
-- App resolution: a guild listed in some app's `GuildIds` sees those apps
-  (as before); anywhere else (DMs, unconfigured servers via a user install)
-  sees **all** apps.
+- App resolution (`AppAccess`): a guild listed in some app's `GuildIds` sees
+  those apps (as before); anywhere else (DMs, unconfigured servers via a user
+  install) the user sees the apps of the configured servers they are a
+  member of, checked per server over REST (decision 101).
 - **Per-user rate limit** (`Limits:ReportsPerUserPerDay`, default 10, 0 =
-  off): a user install exposes every repo to anyone, and each report costs
-  money. Checked when `/issue` opens the modal, recorded on submit.
+  off): a user install lets anyone in a configured server report from
+  anywhere, and each report costs money. Checked when `/issue` opens the modal, recorded on submit.
 
 ## Budget
 

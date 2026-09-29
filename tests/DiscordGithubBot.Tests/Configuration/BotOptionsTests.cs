@@ -379,7 +379,7 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void A_configured_server_sees_only_its_own_apps()
+    public void A_configured_server_has_exactly_its_own_apps()
     {
         var o = Valid();
         o.Apps.Add(new AppConfig
@@ -387,25 +387,21 @@ public class BotOptionsTests
             Name = "Other", Repo = "owner/other", GitHubToken = "p", GuildIds = [9UL], ChannelIds = [2UL],
         });
 
-        Assert.Equal("owner/repo", Assert.Single(o.AppsForContext(1UL)).Repo);
-        Assert.Equal("owner/other", Assert.Single(o.AppsForContext(9UL)).Repo);
+        Assert.Equal("owner/repo", Assert.Single(o.AppsForGuild(1UL)).Repo);
+        Assert.Equal("owner/other", Assert.Single(o.AppsForGuild(9UL)).Repo);
     }
 
     /// <summary>
-    /// A user install reaches DMs and servers nobody configured; there every app is on offer, as the
-    /// owner decided — which is also why reports are rate limited per user.
+    /// Outside a configured server the answer depends on who is asking — the configured servers they are
+    /// in — which AppAccess works out; the configuration alone offers nothing there.
     /// </summary>
     [Fact]
-    public void Dms_and_unconfigured_servers_see_every_app()
+    public void Dms_and_unconfigured_servers_have_no_apps_of_their_own()
     {
         var o = Valid();
-        o.Apps.Add(new AppConfig
-        {
-            Name = "Other", Repo = "owner/other", GitHubToken = "p", GuildIds = [9UL], ChannelIds = [2UL],
-        });
 
-        Assert.Equal(2, o.AppsForContext(null).Count);
-        Assert.Equal(2, o.AppsForContext(42UL).Count);
+        Assert.Empty(o.AppsForGuild(null));
+        Assert.Empty(o.AppsForGuild(42UL));
     }
 
     [Fact]

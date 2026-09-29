@@ -179,12 +179,12 @@ starts from the right place:
 - **`/issue`** — opens the report modal described above.
 - **`/issue-install`** — an ephemeral message with an **Add to my account**
   button: the Discord link that installs the bot on the caller's own account.
-- **`/issues [app]`** — an ephemeral list of the target repo's open issue
+- **`/list-issues [app]`** — an ephemeral list of the target repo's open issue
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
 
 `/issue` takes no options: with one reachable app the modal opens straight
-away, with several the modal asks which via a dropdown. `/issues` keeps an
+away, with several the modal asks which via a dropdown. `/list-issues` keeps an
 `app` option (it opens no modal to ask in), needed only when several apps are
 reachable; an unknown name answers with the valid ones.
 
@@ -197,8 +197,22 @@ depends on where it was run:
 
 - In a server listed in some app's `GuildIds`: exactly those apps (as
   before).
-- Anywhere else — a DM, a group DM, or a server nobody configured: **every**
-  configured app.
+- Anywhere else — a DM, a group DM, or a server nobody configured: the apps
+  of the configured servers **the user is a member of**. Someone in none of
+  them is told so; installing the bot does not open every repository to
+  anyone who finds it.
+
+Membership is asked of Discord's REST API (`GET /guilds/{id}/members/{user}`,
+one call per configured server, in parallel) each time, not read from the
+gateway cache: the bot runs with the `Guilds` intent only, so its cache never
+hears that someone left or was banned. That endpoint needs no privileged
+intent, but it only works for servers the bot is in — a configured server
+the bot has left is logged as a warning and its apps are skipped. `/issue`
+must show its modal within Discord's three seconds, so the lookups get two
+seconds together; a server Discord did not answer for in time only drops its
+own apps, and if that leaves none the reply asks the user to try again rather
+than saying they are in no server. The modal submit checks again (the pick
+echoes back through the client, and the reporter may have left since).
 
 To allow user installs, open the application in the [Discord Developer
 Portal](https://discord.com/developers/applications) → **Installation** →
@@ -208,8 +222,8 @@ link `/issue-install` hands out is built from the interaction's application id,
 so there is nothing to configure in the bot. Global commands replace the
 per-server registrations of earlier versions; the bot clears those on start.
 
-Because every repository is reachable by anyone who installs the bot, and
-every report costs money, each Discord user may submit **10 reports per
+Because every report costs money and anyone in a configured server can
+report from anywhere once they install the bot, each Discord user may submit **10 reports per
 rolling 24 hours** by default (`Limits:ReportsPerUserPerDay`, `0` = no cap).
 The limit is checked when `/issue` opens the modal and counted on submit; it
 lives in memory, so a restart resets it.
@@ -576,12 +590,14 @@ configured app. Enable **User Install** in the Developer Portal first.
    third time: it now goes straight to a draft preview.
 7. **User install.** Run `/issue-install`, press **Add to my account**, and
    authorize. In a DM with a friend (or any server without the bot), `/issue`
-   is available and — with several apps configured — offers every app in the
-   dropdown. The created issue's footer reads "via Discord".
+   is available and offers only the apps of the configured servers you are
+   in (a dropdown when that is several). The created issue's footer reads
+   "via Discord". From an account in none of the configured servers,
+   `/issue` answers that you're not in any of them instead of opening.
 8. **Rate limit.** With `Limits__ReportsPerUserPerDay=1`, a second `/issue`
    within a day answers with the time you can report again instead of a modal.
-9. **`/issues`.** The ephemeral list shows the repository's open issues with
-   working links.
+9. **`/list-issues`.** The ephemeral list shows the repository's open issues
+   with working links; `/issues` is gone from the command list.
 10. **Image-upload smoke test and GitHub App.** As before: `--smoke-upload
     owner/repo` must print `SMOKE OK: <url>`; then swap the PAT for a
     `GitHubApp` block, restart, run the smoke test again (first line must say

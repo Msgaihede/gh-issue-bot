@@ -21,7 +21,8 @@ they are most likely about. Every model call goes through
 - **One command, user-installable** — `/issue` opens a modal (description +
   up to 10 screenshots). The bot can be added to a server or to a user's own
   Discord account (`/issue-install` hands out the link), so it works in any
-  server, DM or group chat.
+  server, DM or group chat — outside a configured server, for the apps of the
+  configured servers you are a member of.
 - **Jev decides** — bug vs feature, which of three drafted titles best
   describes the issue, which of the repository's labels apply, which open
   issue (if any) it duplicates, and which files it is about. Decisions come
@@ -74,7 +75,7 @@ flowchart TD
 | --- | --- |
 | `/issue` | Report a bug or request a feature → deduplicated, labelled issue |
 | `/issue-install` | Link to add the bot to your own Discord account |
-| `/issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
+| `/list-issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
 
 ## Getting started
 

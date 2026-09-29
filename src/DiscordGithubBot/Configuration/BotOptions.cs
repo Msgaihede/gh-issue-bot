@@ -280,16 +280,12 @@ public sealed class BotOptions
     }
 
     /// <summary>
-    /// The apps a command may report to, given where it was run. A server listed in some app's
-    /// <see cref="AppConfig.GuildIds"/> sees exactly those apps. Anywhere else — a DM with the bot, a group
-    /// DM, or a server the bot was never configured for, all reachable once a user installs the bot on
-    /// their own account — sees every configured app.
+    /// The apps configured for a server: those listing it in <see cref="AppConfig.GuildIds"/>. Empty for a
+    /// DM (no server) or a server nobody configured — what a user may use there depends on which configured
+    /// servers they are in, which <c>AppAccess</c> works out.
     /// </summary>
-    public IReadOnlyList<AppConfig> AppsForContext(ulong? guildId)
-    {
-        var configured = guildId is { } id ? Apps.Where(a => a.GuildIds.Contains(id)).ToList() : [];
-        return configured.Count > 0 ? configured : Apps;
-    }
+    public IReadOnlyList<AppConfig> AppsForGuild(ulong? guildId) =>
+        guildId is { } id ? Apps.Where(a => a.GuildIds.Contains(id)).ToList() : [];
 
     /// <summary>The app owning the given "owner/repo", or null when none matches.</summary>
     public AppConfig? AppByRepo(string repo) =>

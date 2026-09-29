@@ -25,6 +25,7 @@ public class InteractionRoutingTests
 
         var services = new ServiceCollection()
             .AddSingleton(new BotOptions())
+            .AddSingleton(new AppAccess(new BotOptions(), Substitute.For<IGuildMembership>(), NullLogger<AppAccess>.Instance))
             .AddSingleton(Substitute.For<IReportPipeline>())
             .AddSingleton(Substitute.For<IGitHubService>())
             .AddSingleton(new ReportRateLimiter(new BotOptions(), TimeProvider.System))
@@ -43,7 +44,7 @@ public class InteractionRoutingTests
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(["issue", "issue-install", "issues"], module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(["issue", "issue-install", "list-issues"], module.SlashCommands.Select(c => c.Name).Order());
     }
 
     /// <summary>
@@ -99,11 +100,11 @@ public class InteractionRoutingTests
     }
 
     [Fact]
-    public async Task Issues_keeps_its_optional_app_option()
+    public async Task List_issues_keeps_its_optional_app_option()
     {
         var module = await BuildModuleAsync();
 
-        var issues = module.SlashCommands.Single(c => c.Name == "issues");
+        var issues = module.SlashCommands.Single(c => c.Name == "list-issues");
         var parameter = Assert.Single(issues.Parameters);
         Assert.Equal("app", parameter.Name);
         Assert.False(parameter.IsRequired);

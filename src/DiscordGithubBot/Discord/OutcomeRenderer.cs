@@ -105,7 +105,7 @@ public static class OutcomeRenderer
             if (urls.Count > 0) container.WithMediaGallery(urls);
         });
 
-    /// <summary>Ephemeral open-issues list for /issues.</summary>
+    /// <summary>Ephemeral open-issues list for /list-issues.</summary>
     public static MessageComponent RenderIssueList(string appName, IReadOnlyList<GitHubIssue> issues)
     {
         var heading = $"**Open issues — {Inline(appName)}**";

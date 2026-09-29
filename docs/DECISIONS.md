@@ -1235,6 +1235,8 @@ below record the choices inside it that are not obvious from the code.
     sees every configured app — the owner's choice over an opt-in flag or a
     membership check. Resolution is one place, `BotOptions.AppsForContext`,
     used for opening the modal, validating its submit, and `/issues`.
+    *(Superseded by decision 101: outside a configured server a user now sees
+    only the apps of the configured servers they are a member of.)*
 
 87. **Reports are rate limited per user: 10 per rolling day by default.**
     With every repository reachable by anyone who installs the bot, and each
@@ -1472,3 +1474,30 @@ below record the choices inside it that are not obvious from the code.
     setting was already configurable; it now defaults to `medium`, appears in
     `.env.example`, and an unknown value fails startup, since OpenRouter
     would answer it with a 400 on every call.
+
+100. **`/issues` is renamed `/list-issues`.** The owner's call: next to
+     `/issue`, a command one letter longer that does something else entirely
+     was easy to pick by mistake from Discord's command list. Nothing else
+     changed — same `app` option, same list. The bot registers its commands
+     globally with `deleteMissing`, so the first start of this version
+     removes `/issues` for servers and user installs alike; Discord clients
+     may show the old name until they refresh their command cache.
+
+101. **Outside a configured server, a user sees only the apps of the
+     configured servers they are a member of.** Supersedes decision 86
+     (every app everywhere): the owner changed their mind — installing the
+     bot should not open every repository to anyone who finds it. A server
+     listed in `GuildIds` still sees exactly its own apps. Elsewhere,
+     `AppAccess` asks Discord about each configured server in parallel
+     through `GET /guilds/{id}/members/{user}` (Discord.Net's
+     `Rest.GetGuildUserAsync`) — every time, no cache: the bot runs with the
+     `Guilds` intent only, so its gateway member cache fills with whoever
+     used a command and never hears about leaves or bans, which would let a
+     banned user keep reporting from DMs until a restart. The endpoint needs
+     no privileged intent (checked live against both configured servers:
+     the bot is found, an unknown id is not). `/issue` cannot defer before
+     showing a modal, so all lookups share a two-second deadline; a server
+     that errors or times out drops only its own apps, and when that leaves
+     nothing the reply asks the user to retry instead of claiming they are
+     in no server. The modal submit runs the same check again. The rate
+     limit (decision 87) stays: it guards spend, not access.

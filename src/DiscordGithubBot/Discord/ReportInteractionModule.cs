@@ -13,8 +13,8 @@ namespace DiscordGithubBot.Discord;
 
 /// <summary>
 /// Every slash command, modal submit and button click the bot answers. The module itself only routes and
-/// answers: the decisions live in <see cref="IReportPipeline"/>, the wording in <see cref="OutcomeRenderer"/>
-/// and the app lookup in <see cref="AppResolution"/>.
+/// answers: the decisions live in <see cref="IReportPipeline"/>, the wording in <see cref="OutcomeRenderer"/>,
+/// which apps the user may use in <see cref="AppAccess"/> and the pick among them in <see cref="AppResolution"/>.
 /// </summary>
 /// <remarks>
 /// Every handler is declared <see cref="RunMode.Sync"/>: <c>BotService</c> owns both the background task the
@@ -31,6 +31,7 @@ namespace DiscordGithubBot.Discord;
 [CommandContextType(InteractionContextType.Guild, InteractionContextType.BotDm, InteractionContextType.PrivateChannel)]
 public class ReportInteractionModule(
     BotOptions options,
+    AppAccess appAccess,
     IReportPipeline pipeline,
     AttachmentDownloader downloader,
     IGitHubService gitHub,
@@ -39,7 +40,7 @@ public class ReportInteractionModule(
     ILogger<ReportInteractionModule> logger)
     : InteractionModuleBase<SocketInteractionContext>
 {
-    private const string AppOptionDescription = "Which app (only needed when several are configured)";
+    private const string AppOptionDescription = "Which app (only needed when several are available to you)";
     // One wording for all three ways a pending report stops being actionable — expired, unknown, or
     // claimed by a click that is already talking to GitHub. A reporter cannot tell them apart and does
     // not need to: in every case the answer is to start again.
@@ -73,10 +74,10 @@ public class ReportInteractionModule(
             components: OutcomeRenderer.RenderInstallLink(InstallLinks.UserInstall(Context.Interaction.ApplicationId)),
             ephemeral: true);
 
-    [SlashCommand("issues", "List open GitHub issues", runMode: RunMode.Sync)]
-    public async Task Issues([Summary(description: AppOptionDescription)] string? app = null)
+    [SlashCommand("list-issues", "List open GitHub issues", runMode: RunMode.Sync)]
+    public async Task ListIssues([Summary(description: AppOptionDescription)] string? app = null)
     {
-        var (resolved, error) = ResolveApp(app);
+        var (resolved, error) = await ResolveAppAsync(app);
         if (error is not null)
         {
             await RespondAsync(error, ephemeral: true);
@@ -105,14 +106,17 @@ public class ReportInteractionModule(
         // The three-second acknowledgement deadline comes before everything else, including the download.
         await DeferAsync(ephemeral: true);
 
-        var (app, pickedRepo) = ResolveModalApp(repoToken);
+        // Checked again, not trusted from when the modal opened: the pick echoes back through the client,
+        // and the reporter may have left the app's server in the meantime.
+        var access = await AppsHereAsync();
+        var (app, pickedRepo) = ResolveModalApp(repoToken, access.Apps);
         if (app is null)
         {
-            logger.LogWarning("Modal submitted for unknown or out-of-guild repository {Repo}.", pickedRepo);
+            logger.LogWarning("Modal submitted for an unknown or unavailable repository {Repo}.", pickedRepo);
             await FollowupAsync(
-                pickedRepo.Length == 0
+                access.Error ?? (pickedRepo.Length == 0
                     ? "I couldn't tell which app you picked. Please run the command again."
-                    : "That app is no longer configured. Please run the command again.",
+                    : "That app isn't available to you here any more. Please run the command again."),
                 ephemeral: true);
             return;
         }
@@ -255,7 +259,10 @@ public class ReportInteractionModule(
             return;
         }
 
-        var (app, choices, error) = AppResolution.PlanModal(options.AppsForContext(Context.Interaction.GuildId));
+        var access = await AppsHereAsync();
+        var (app, choices, error) = access.Error is null
+            ? AppResolution.PlanModal(access.Apps)
+            : (null, null, access.Error);
         if (error is not null)
         {
             await RespondAsync(error, ephemeral: true);
@@ -276,8 +283,13 @@ public class ReportInteractionModule(
             modifyModal: modal => modal.Components.Insert(0, ReportModal.BuildAppPicker(choices!)));
     }
 
-    private (AppConfig? App, string? Error) ResolveApp(string? appName) =>
-        AppResolution.Resolve(options.AppsForContext(Context.Interaction.GuildId), appName);
+    private Task<AppAccessResult> AppsHereAsync() => appAccess.ForAsync(Context.Interaction.GuildId, Context.User.Id);
+
+    private async Task<(AppConfig? App, string? Error)> ResolveAppAsync(string? appName)
+    {
+        var access = await AppsHereAsync();
+        return access.Error is null ? AppResolution.Resolve(access.Apps, appName) : (null, access.Error);
+    }
 
     private static string RateLimitedMessage(DateTimeOffset retryAt) =>
         "You've sent the most reports allowed in a day. " +
@@ -285,11 +297,11 @@ public class ReportInteractionModule(
 
     /// <summary>
     /// The app a submitted modal is for: named by the custom id when the context had one app, read from
-    /// the app dropdown when the reporter picked one inside the modal. Resolved against the apps of the
-    /// context the modal came from, not every configured one — both values echo back through the client,
-    /// and another server's repository is not a valid pick here.
+    /// the app dropdown when the reporter picked one inside the modal. Resolved against the apps this user
+    /// may use here (<paramref name="apps"/>), not every configured one — both values echo back through
+    /// the client, and another server's repository is not a valid pick here.
     /// </summary>
-    private (AppConfig? App, string Repo) ResolveModalApp(string repoToken)
+    private (AppConfig? App, string Repo) ResolveModalApp(string repoToken, IReadOnlyList<AppConfig> apps)
     {
         var selectValue = repoToken == ReportModal.PickAppToken
             ? ((IModalInteraction)Context.Interaction).Data.Components
@@ -298,8 +310,7 @@ public class ReportInteractionModule(
             : null;
 
         var repo = AppResolution.PickedRepo(repoToken, selectValue);
-        var app = options.AppsForContext(Context.Interaction.GuildId)
-            .FirstOrDefault(a => string.Equals(a.Repo, repo, StringComparison.OrdinalIgnoreCase));
+        var app = apps.FirstOrDefault(a => string.Equals(a.Repo, repo, StringComparison.OrdinalIgnoreCase));
 
         return (app, repo);
     }

@@ -103,6 +103,8 @@ public static class HostSetup
         // discord
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ReportRateLimiter>();
+        services.AddSingleton<IGuildMembership, DiscordGuildMembership>();
+        services.AddSingleton<AppAccess>();
         services.AddSingleton(new DiscordSocketClient(new DiscordSocketConfig
         {
             GatewayIntents = GatewayIntents.Guilds,

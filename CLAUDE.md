@@ -68,7 +68,11 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   background by `CodeContextPrefetcher` after the preview is shown and stored
   on the pending report; the click only picks it up.
 - Commands are global and user-installable: never rely on `Context.Guild`;
-  use `Context.Interaction.GuildId` and `BotOptions.AppsForContext`.
+  ask `AppAccess.ForAsync(Context.Interaction.GuildId, Context.User.Id)`. A
+  configured server gets its own apps; anywhere else the user gets the apps
+  of the configured servers they are in, checked over REST
+  (`IGuildMembership`) — the bot has only the `Guilds` intent, so its member
+  cache is never trusted for this.
 - All interaction replies are ephemeral; only issue creations post publicly.
 - The report modal's "App" dropdown is not declared on ReportModal — its
   options are per-guild, so OpenModalAsync injects it via `modifyModal`, and
