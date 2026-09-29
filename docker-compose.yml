@@ -11,7 +11,7 @@ services:
       - botdata:/data
     secrets:
       - Discord__Token
-      - OpenAI__ApiKey
+      - OpenRouter__ApiKey
       # GitHub App private key for the first configured app: the file name is
       # the config key, its content is the .pem GitHub gave you. Uncomment
       # here and below (and drop Apps__0__GitHubToken) to authenticate as a
@@ -24,7 +24,7 @@ volumes:
 secrets:
   Discord__Token:
     file: ./secrets/Discord__Token
-  OpenAI__ApiKey:
-    file: ./secrets/OpenAI__ApiKey
+  OpenRouter__ApiKey:
+    file: ./secrets/OpenRouter__ApiKey
   # Apps__0__GitHubApp__PrivateKey:
   #   file: ./secrets/Apps__0__GitHubApp__PrivateKey

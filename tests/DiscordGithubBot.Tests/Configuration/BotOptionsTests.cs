@@ -9,7 +9,7 @@ public class BotOptionsTests
     private static BotOptions Valid() => new()
     {
         Discord = new() { Token = "t" },
-        OpenAI = new() { ApiKey = "k" },
+        OpenRouter = new() { ApiKey = "k" },
         Apps =
         [
             new AppConfig
@@ -31,10 +31,59 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void Missing_openai_key_is_reported()
+    public void Missing_openrouter_key_is_reported()
     {
-        var o = Valid(); o.OpenAI.ApiKey = "";
-        Assert.Contains(o.Validate(), e => e.Contains("OpenAI:ApiKey"));
+        var o = Valid(); o.OpenRouter.ApiKey = "";
+        Assert.Contains(o.Validate(), e => e.Contains("OpenRouter:ApiKey"));
+    }
+
+    [Fact]
+    public void Missing_models_are_reported()
+    {
+        var o = Valid(); o.OpenRouter.ChatModel = ""; o.OpenRouter.DecisionModel = " ";
+        var errors = o.Validate();
+        Assert.Contains(errors, e => e.Contains("OpenRouter:ChatModel"));
+        Assert.Contains(errors, e => e.Contains("OpenRouter:DecisionModel"));
+    }
+
+    /// <summary>Thresholds belong to the build they were set on; an alias moves to a new build unannounced.</summary>
+    [Fact]
+    public void An_aliased_decision_model_is_rejected()
+    {
+        var o = Valid(); o.OpenRouter.DecisionModel = "~typesafe/jev-latest";
+        Assert.Contains(o.Validate(), e => e.Contains("alias"));
+    }
+
+    [Fact]
+    public void A_non_positive_chat_deadline_is_rejected()
+    {
+        var o = Valid(); o.OpenRouter.ChatDeadlineSeconds = 0;
+        Assert.Contains(o.Validate(), e => e.Contains("ChatDeadlineSeconds"));
+    }
+
+    [Fact]
+    public void The_defaults_are_gpt6_luna_on_flex_first_and_a_pinned_jev()
+    {
+        var o = new OpenRouterOptions();
+        Assert.Equal("openai/gpt-6-luna", o.ChatModel);
+        Assert.Equal("typesafe/jev-1.13", o.DecisionModel);
+        Assert.Equal(["openai/flex", "openai"], o.EffectiveChatProviders);
+        Assert.Equal(["openai"], o.EffectiveChatRetryProviders);
+    }
+
+    /// <summary>
+    /// The binder appends to an initialised list; the provider lists are nullable so a configured order
+    /// replaces the default instead of being tacked on behind it.
+    /// </summary>
+    [Fact]
+    public void A_configured_provider_order_replaces_the_default()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["OpenRouter:ChatProviders:0"] = "azure",
+        }).Build();
+
+        Assert.Equal(["azure"], config.Get<BotOptions>()!.OpenRouter.EffectiveChatProviders);
     }
 
     [Fact]
@@ -260,7 +309,7 @@ public class BotOptionsTests
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Discord:Token"] = "tok",
-            ["OpenAI:ApiKey"] = "key",
+            ["OpenRouter:ApiKey"] = "key",
             ["Apps:0:Name"] = "MyApp",
             ["Apps:0:Repo"] = "owner/repo",
             ["Apps:0:GitHubApp:AppId"] = "12345",
@@ -322,7 +371,7 @@ public class BotOptionsTests
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Discord:Token"] = "tok",
-            ["OpenAI:ApiKey"] = "key",
+            ["OpenRouter:ApiKey"] = "key",
             ["Apps:0:Name"] = "MyApp",
             ["Apps:0:Repo"] = "owner/repo",
             ["Apps:0:GitHubToken"] = "pat",
@@ -332,6 +381,6 @@ public class BotOptionsTests
         var o = config.Get<BotOptions>()!;
         Assert.Empty(o.Validate());
         Assert.Equal(111111111111111111UL, o.Apps[0].GuildIds[0]);
-        Assert.Equal("gpt-5.6-luna", o.OpenAI.ChatModel); // default survives binding
+        Assert.Equal("openai/gpt-6-luna", o.OpenRouter.ChatModel); // default survives binding
     }
 }

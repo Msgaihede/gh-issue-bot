@@ -1115,3 +1115,72 @@ below record the choices inside it that are not obvious from the code.
     log what each report actually cost instead of trusting the estimate in
     the spec. The meter is scoped — one report, one click, one refresh — and
     locked, because a report fans decision calls out in parallel.
+
+79. **One `/issue` command; Jev decides bug or feature.** The reporter no
+    longer chooses between `/report-issue` and `/request-feature` — the
+    decision model reads the report and answers a two-option `choice`
+    (`ReportClassifier`), which picks the draft template and the type label.
+    A `choice` rather than a `noul` because the two are mutually exclusive
+    alternatives of one rubric. A failed call falls back to *bug*: most
+    reports are, and the preview now shows the classified type ("Bug
+    report") above the draft, so a wrong call is visible before anything is
+    filed and Cancel is the way out.
+
+80. **Duplicates are found by the decision model reading the open issues,
+    in two stages — the embedding/KNN path is gone.** The owner's finding
+    was that nearest-neighbour similarity did not work; the replacement
+    reads contents. Stage one (`Shortlist`) is TypeSafe's "rank, then
+    re-check" pattern: one `choice` over every open issue (title + 300-char
+    excerpt, keyed `issue_<n>`, plus `none`), chunked at 120 issues so a
+    request stays near half of Jev's 32k context, with a final `choice` over
+    the survivors when several chunks produced any (each chunk's
+    distribution is normalised over its own options only). Anything at 0.05
+    or above survives, top 5. Stage two lays each survivor's full excerpt
+    next to the draft and asks one three-level `score` per issue —
+    *different* / *related but distinct* / *same underlying problem* — and
+    routes on the probability of the top level: >= 0.5 offers the issue,
+    >= 0.2 asks the reporter, below is dropped. A `score` rather than a
+    `noul` because the explicit "related" level draws off the mass a yes/no
+    question gives to same-area-different-bug issues (decision models read
+    loosely). Two issues above 0.5 are a pick list, not a match. The
+    thresholds are the Decisions skill's pre-probe defaults and live as
+    named constants; no API key was available while building this, so they
+    are unprobed — `--dry-run` exists to tune them. Degradation keeps "ask
+    rather than guess": stage two failing asks about the whole shortlist;
+    stage one failing has nothing to ask about and treats the report as new
+    (the reporter still confirms). Dedup runs on the normalized draft, not
+    the raw text: English, structured, and closer in shape to the issues it
+    is compared with.
+
+81. **Only open issues are candidates; the "still happening?" flow is
+    removed.** The owner's requirement says dedup against open issues, and
+    confirmed dropping the closed-within-30-days flow (decision 2) with its
+    buttons, the regression line, and `ReportOutcomeKind.MatchClosed`. The
+    cache (`CachedIssue`) now holds open issues only: an incremental pass
+    upserts what is open and deletes what closed; a full pass lists every
+    open issue and replaces the cache with exactly that, which also clears
+    deleted or transferred issues an update feed never reports. The first
+    sync is full (open issues only — the old cache paged through every
+    closed issue ever filed) and a full pass repeats daily.
+
+82. **The database schema is stamped with `PRAGMA user_version` and rebuilt
+    on a mismatch, replacing "delete your SQLite file".** Decisions 52, 59
+    and 68 each asked operators to delete the file by hand after a schema
+    change — easy to miss on a Docker volume, and fatal on the first query.
+    `DatabaseSchema.EnsureCurrent` compares the stamp with
+    `DatabaseSchema.Version`; on a mismatch it drops every table, recreates
+    the schema and stamps it. That is only acceptable because nothing in
+    the file is precious — caches rebuild and drafts live an hour — and it
+    is still not a migration story: the day the file holds real data, this
+    repo needs EF migrations.
+
+83. **The draft model writes three alternative titles under explicit
+    "representative title" rules.** The owner asked that titles represent
+    the actual issue. The prompt now demands the specific symptom (bugs) or
+    capability (features) and where it happens, the reporter's concrete
+    details, and bans generic phrasings by example ("Bug report", "Issue
+    with the app"); the old "imperative mood" rule is gone, since "Fix
+    checkout" says less than "Checkout page goes blank after tapping Pay".
+    Three alternatives rather than one so the choice can be made separately
+    from the writing; until the decision model picks (next feature), the
+    first is used.

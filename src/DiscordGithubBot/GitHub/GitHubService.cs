@@ -15,7 +15,8 @@ public sealed record GitHubIssue(
 
 public interface IGitHubService
 {
-    Task<GitHubIssue> CreateIssueAsync(AppConfig app, string title, string body, string label, CancellationToken ct = default);
+    Task<GitHubIssue> CreateIssueAsync(
+        AppConfig app, string title, string body, IReadOnlyList<string> labels, CancellationToken ct = default);
 
     /// <returns>The html_url of the created comment.</returns>
     Task<string> AddCommentAsync(AppConfig app, int issueNumber, string body, CancellationToken ct = default);
@@ -36,11 +37,11 @@ public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : I
     private const int PerPage = 100;
 
     public async Task<GitHubIssue> CreateIssueAsync(
-        AppConfig app, string title, string body, string label, CancellationToken ct = default)
+        AppConfig app, string title, string body, IReadOnlyList<string> labels, CancellationToken ct = default)
     {
         using var resp = await SendAsync(
             app, HttpMethod.Post, $"repos/{app.Repo}/issues",
-            new CreateIssuePayload(title, body, [label]), ct);
+            new CreateIssuePayload(title, body, labels.ToArray()), ct);
         return ToIssue(await ReadJsonAsync<IssueDto>(resp, ct));
     }
 

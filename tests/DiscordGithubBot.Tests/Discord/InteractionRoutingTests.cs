@@ -36,26 +36,21 @@ public class InteractionRoutingTests
         return await interactions.AddModuleAsync<ReportInteractionModule>(services);
     }
 
+    /// <summary>One reporting command; the decision model, not the reporter, decides bug or feature.</summary>
     [Fact]
-    public async Task Registers_the_three_slash_commands()
+    public async Task Registers_one_report_command_and_the_issue_list()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(
-            ["issues", "report-issue", "request-feature"],
-            module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(["issue", "issues"], module.SlashCommands.Select(c => c.Name).Order());
     }
 
     [Fact]
-    public async Task Report_commands_take_no_options()
+    public async Task The_report_command_takes_no_options()
     {
         var module = await BuildModuleAsync();
 
-        var reportCommands = module.SlashCommands
-            .Where(c => c.Name is "report-issue" or "request-feature").ToList();
-
-        Assert.Equal(2, reportCommands.Count);
-        Assert.All(reportCommands, c => Assert.Empty(c.Parameters));
+        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue").Parameters);
     }
 
     [Fact]
@@ -65,8 +60,7 @@ public class InteractionRoutingTests
 
         string[] actions =
         [
-            CustomIds.Create, CustomIds.Cancel, CustomIds.Comment, CustomIds.Draft,
-            CustomIds.StillOpen, CustomIds.Fixed, CustomIds.Pick,
+            CustomIds.Create, CustomIds.Cancel, CustomIds.Comment, CustomIds.Draft, CustomIds.Pick,
         ];
 
         Assert.Equal(
@@ -91,7 +85,7 @@ public class InteractionRoutingTests
         var module = await BuildModuleAsync();
 
         var modal = Assert.Single(module.ModalCommands);
-        Assert.Equal("report-modal|*|*", modal.Name);
+        Assert.Equal("report-modal|*", modal.Name);
     }
 
     /// <summary>
@@ -106,7 +100,7 @@ public class InteractionRoutingTests
         var modalInfo = Assert.Single(module.ModalCommands).Modal;
 
         var modal = await ((IDiscordInteraction)null!).ToModalAsync(
-            $"report-modal|bug|{ReportModal.PickAppToken}", modalInfo, (ReportModal)null!, null,
+            $"report-modal|{ReportModal.PickAppToken}", modalInfo, (ReportModal)null!, null,
             builder => builder.Components.Insert(0, ReportModal.BuildAppPicker([
                 new AppConfig { Name = "mira", Repo = "acme/mira" },
                 new AppConfig { Name = "nova", Repo = "acme/nova" }])));

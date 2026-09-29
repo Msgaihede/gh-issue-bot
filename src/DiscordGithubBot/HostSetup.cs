@@ -3,15 +3,14 @@ using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.Discord;
 using DiscordGithubBot.GitHub;
+using DiscordGithubBot.OpenRouter;
 using DiscordGithubBot.Pipeline;
 using global::Discord;
 using global::Discord.Interactions;
 using global::Discord.WebSocket;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenAI;
 
 namespace DiscordGithubBot;
 
@@ -23,6 +22,9 @@ public static class HostSetup
 {
     /// <summary>Base address for every GitHub client; the uploads host is addressed absolutely.</summary>
     private const string GitHubApiBaseAddress = "https://api.github.com/";
+
+    /// <summary>Every model call goes to OpenRouter; chat lives under <c>v1/</c>, decisions under <c>alpha/</c>.</summary>
+    private const string OpenRouterBaseAddress = "https://openrouter.ai/api/";
 
     /// <summary>Named client for the token exchange — named rather than typed, see the registration below.</summary>
     private const string GitHubAuthClientName = "github-auth";
@@ -38,7 +40,7 @@ public static class HostSetup
     /// request and response headers at Trace, which on a GitHub client means a PAT — or a freshly minted
     /// installation token — in plain text in whatever collects the logs. Applied to every GitHub-facing
     /// client, including the token exchange, whose request carries the App JWT and whose response carries
-    /// the installation token.
+    /// the installation token, and to both OpenRouter clients, which carry the API key.
     /// </summary>
     private static readonly string[] RedactedHeaders = ["Authorization"];
 
@@ -73,16 +75,18 @@ public static class HostSetup
         services.AddHttpClient<AttachmentDownloader>(
             c => c.MaxResponseContentBufferSize = AttachmentDownloader.MaxBytes + 1);
 
-        // AI (OpenAIClient construction is lazy and network-free; startup validation guarantees a key,
-        // and the DI test passes a dummy key)
-        var openAi = new OpenAIClient(options.OpenAI.ApiKey);
-        services.AddSingleton(openAi.GetChatClient(options.OpenAI.ChatModel).AsIChatClient());
-        services.AddSingleton(openAi.GetEmbeddingClient(options.OpenAI.EmbeddingModel)
-            .AsIEmbeddingGenerator(VectorRanker.EmbeddingDimensions));
+        // AI, all of it through OpenRouter. The typed clients are transient and resolved inside a scope,
+        // where they share that scope's usage meter — one total per report, click or refresh.
+        services.AddScoped<AiUsageMeter>();
+        services.AddHttpClient<IOpenRouterChat, OpenRouterChatClient>(c => ConfigureOpenRouterClient(c, options))
+            .RedactLoggedHeaders(RedactedHeaders);
+        services.AddHttpClient<IDecisionModel, DecisionClient>(c => ConfigureOpenRouterClient(c, options))
+            .RedactLoggedHeaders(RedactedHeaders);
 
         // pipeline
+        services.AddScoped<IReportClassifier, ReportClassifier>();
         services.AddScoped<IReportNormalizer, ReportNormalizer>();
-        services.AddScoped<IDuplicateJudge, DuplicateJudge>();
+        services.AddScoped<IDuplicateFinder, DuplicateFinder>();
         services.AddScoped<IAdditionalInfoExtractor, AdditionalInfoExtractor>();
         services.AddScoped<IIssueSyncService, IssueSyncService>();
         services.AddScoped<IPendingReportStore, PendingReportStore>();
@@ -98,6 +102,19 @@ public static class HostSetup
         services.AddHostedService<BotService>();
         services.AddHostedService<MaintenanceService>();
         return services;
+    }
+
+    /// <summary>
+    /// The key is the same for every call, so it rides as a default header. The client timeout is off:
+    /// each call sets its own deadline — seconds for a reporter who is waiting, minutes for background
+    /// work that may sit in the flex queue — and a fixed timeout here would cut the long ones short.
+    /// </summary>
+    private static void ConfigureOpenRouterClient(HttpClient http, BotOptions options)
+    {
+        http.BaseAddress = new Uri(OpenRouterBaseAddress);
+        http.Timeout = Timeout.InfiniteTimeSpan;
+        http.DefaultRequestHeaders.Authorization = new("Bearer", options.OpenRouter.ApiKey);
+        http.DefaultRequestHeaders.Add("X-Title", "discord-gh-issue-bot");
     }
 
     private static void ConfigureGitHubClient(HttpClient http)

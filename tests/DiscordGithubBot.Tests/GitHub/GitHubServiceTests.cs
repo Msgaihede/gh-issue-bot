@@ -18,20 +18,20 @@ public class GitHubServiceTests
         new(fake.CreateClient(), new PassThroughAuthProvider());
 
     [Fact]
-    public async Task CreateIssue_posts_title_body_label_and_bearer_token()
+    public async Task CreateIssue_posts_title_body_labels_and_bearer_token()
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Created,
             """{"number":42,"title":"T","body":"B","state":"open","updated_at":"2026-08-18T00:00:00Z","closed_at":null,"html_url":"https://github.com/owner/repo/issues/42"}""");
         var svc = Service(fake);
 
-        var issue = await svc.CreateIssueAsync(App, "T", "B", "bug");
+        var issue = await svc.CreateIssueAsync(App, "T", "B", ["bug", "ui"]);
 
         Assert.Equal(42, issue.Number);
         Assert.Equal("https://github.com/owner/repo/issues/42", issue.HtmlUrl);
         var req = Assert.Single(fake.Requests);
         Assert.Equal("Bearer PAT123", req.AuthHeader);
-        Assert.Contains("\"bug\"", req.Body);
+        Assert.Contains("\"labels\":[\"bug\",\"ui\"]", req.Body);
         Assert.Contains("\"T\"", req.Body);
     }
 
@@ -103,6 +103,6 @@ public class GitHubServiceTests
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Unauthorized, "{}");
         var svc = Service(fake);
-        await Assert.ThrowsAsync<HttpRequestException>(() => svc.CreateIssueAsync(App, "t", "b", "bug"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => svc.CreateIssueAsync(App, "t", "b", ["bug"]));
     }
 }

@@ -7,8 +7,11 @@ public enum ReportType
     Feature,
 }
 
-/// <summary>A GitHub issue plus its cached embedding, used for duplicate detection.</summary>
-public class IssueEmbedding
+/// <summary>
+/// An open GitHub issue as duplicate detection reads it. Only open issues are kept: dedup compares new
+/// reports against open issues alone, and the sync deletes a row as soon as its issue closes.
+/// </summary>
+public class CachedIssue
 {
     public int Id { get; set; }
 
@@ -17,30 +20,15 @@ public class IssueEmbedding
 
     public int IssueNumber { get; set; }
     public required string Title { get; set; }
-
-    /// <summary>"open" or "closed".</summary>
-    public required string State { get; set; }
-
-    public DateTime? ClosedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
 
-    /// <summary>SHA256 hex of title + "\n" + body; lets sync skip unchanged issues.</summary>
-    public required string ContentHash { get; set; }
-
-    /// <summary>First 1000 characters of the issue body.</summary>
+    /// <summary>
+    /// The start of the issue body — the reporter's half only, for issues this bot filed (see
+    /// <c>IssueSyncService.SemanticBody</c>). What the duplicate finder reads.
+    /// </summary>
     public string BodyExcerpt { get; set; } = "";
 
     public string HtmlUrl { get; set; } = "";
-
-    /// <summary>Embedding vector; persisted as a BLOB via <see cref="VectorConversion"/>.</summary>
-    public float[] Vector { get; set; } = [];
-
-    /// <summary>
-    /// The OpenAI model id that produced <see cref="Vector"/>. Vectors from different models share no
-    /// coordinate space, so a row whose model no longer matches the configured one is not a comparable
-    /// candidate; sync re-embeds it instead.
-    /// </summary>
-    public string EmbeddingModel { get; set; } = "";
 }
 
 /// <summary>A drafted issue awaiting the reporter's confirmation.</summary>
@@ -93,5 +81,10 @@ public class PendingAttachment
 public class RepoSyncState
 {
     public required string RepoKey { get; set; }
+
+    /// <summary>Watermark for the next incremental pass (GitHub's <c>since</c>).</summary>
     public DateTime LastSyncUtc { get; set; }
+
+    /// <summary>When every open issue was last listed and the cache replaced with exactly those.</summary>
+    public DateTime LastFullSyncUtc { get; set; }
 }

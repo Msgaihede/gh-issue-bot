@@ -48,34 +48,39 @@ public static class OutcomeRenderer
     /// <param name="notice">Optional first line, e.g. which attachments were skipped.</param>
     public static MessageComponent Render(ReportOutcome outcome, string? notice = null) => outcome.Kind switch
     {
-        ReportOutcomeKind.MatchOpen or ReportOutcomeKind.MatchClosed when outcome.Match is not null =>
+        ReportOutcomeKind.Match when outcome.Match is not null =>
             RenderMatch(outcome.Match, outcome.PendingReportId, notice),
         ReportOutcomeKind.Uncertain when outcome.Candidates.Count > 0 =>
             RenderUncertain(outcome.Candidates, outcome.PendingReportId, notice),
         _ => RenderDraftPreview(
-            outcome.Draft, outcome.PendingReportId,
+            outcome.Draft, outcome.Type, outcome.PendingReportId,
             heading: "**No existing issue matches. Here's the draft:**", notice: notice),
     };
 
-    /// <summary>
-    /// The "we found something" flow for one candidate: an open issue offers to attach the report to it,
-    /// a closed one asks whether the problem is back.
-    /// </summary>
+    /// <summary>The "we found something" flow for one open issue: attach the report to it, or see the draft.</summary>
     public static MessageComponent RenderMatch(CandidateIssue match, Guid pendingId, string? notice = null) =>
-        string.Equals(match.State, "open", StringComparison.OrdinalIgnoreCase)
-            ? RenderMatchOpen(match, pendingId, notice)
-            : RenderMatchClosed(match, pendingId, notice);
+        Container(container => container
+            .WithTextDisplay(Budgeted(Notice(notice) + $"**This looks like an existing issue:** {Link(match)}"))
+            .WithActionRow(row => row
+                .WithButton(ButtonBuilder.CreatePrimaryButton(
+                    "Same issue — add my report", CustomIds.Build(CustomIds.Comment, pendingId, match.Number)))
+                .WithButton(ButtonBuilder.CreateSecondaryButton(
+                    "Not it — show my draft", CustomIds.Build(CustomIds.Draft, pendingId)))));
 
-    /// <summary>Draft preview with Create/Cancel buttons; regressionOf carries into the create button's custom id.</summary>
+    /// <summary>
+    /// Draft preview with Create/Cancel buttons. The type line shows what the decision model classified
+    /// the report as, since the reporter no longer chooses it; Cancel is the way out when it is wrong.
+    /// </summary>
     public static MessageComponent RenderDraftPreview(
-        IssueDraft draft, Guid pendingId, int regressionOf = 0, string? heading = null, string? notice = null) =>
+        IssueDraft draft, ReportType type, Guid pendingId, string? heading = null, string? notice = null) =>
         Container(container => container
             .WithTextDisplay(Budgeted(
                 Notice(notice) + (heading is null ? "" : heading + "\n") +
+                $"-# {TypeName(type)}\n" +
                 $"**{Truncate(Inline(draft.Title), MaxTitleChars)}**\n{Truncate(draft.Body, MaxBodyChars)}"))
             .WithActionRow(row => row
                 .WithButton(ButtonBuilder.CreateSuccessButton(
-                    "Create issue", CustomIds.Build(CustomIds.Create, pendingId, regressionOf)))
+                    "Create issue", CustomIds.Build(CustomIds.Create, pendingId)))
                 .WithButton(ButtonBuilder.CreateDangerButton(
                     "Cancel", CustomIds.Build(CustomIds.Cancel, pendingId)))));
 
@@ -90,7 +95,7 @@ public static class OutcomeRenderer
         Container(container =>
         {
             container.WithTextDisplay(Budgeted(
-                $"**New {(type == ReportType.Bug ? "bug report" : "feature request")} for {Inline(appName)}**\n" +
+                $"**New {TypeName(type).ToLowerInvariant()} for {Inline(appName)}**\n" +
                 $"[#{issue.Number} {Truncate(Inline(issue.Title), MaxLabelChars)}]({issue.HtmlUrl})\n" +
                 $"Reported by {Inline(reporterDisplayName)} via Discord"));
 
@@ -140,30 +145,6 @@ public static class OutcomeRenderer
     public static MessageComponent RenderCommented(CommentResult comment) =>
         Message($"💬 Added your report to [#{comment.IssueNumber}]({comment.CommentUrl})");
 
-    /// <summary>Closing message for a reporter who confirmed a closed issue really is fixed.</summary>
-    public static MessageComponent RenderFixed(string repoKey, int issueNumber) =>
-        Message($"Glad it's fixed! Reference: [#{issueNumber}](https://github.com/{repoKey}/issues/{issueNumber})");
-
-    private static MessageComponent RenderMatchOpen(CandidateIssue match, Guid pendingId, string? notice) =>
-        Container(container => container
-            .WithTextDisplay(Budgeted(Notice(notice) + $"**This looks like an existing issue:** {Link(match)}"))
-            .WithActionRow(row => row
-                .WithButton(ButtonBuilder.CreatePrimaryButton(
-                    "Same issue — add my report", CustomIds.Build(CustomIds.Comment, pendingId, match.Number)))
-                .WithButton(ButtonBuilder.CreateSecondaryButton(
-                    "Not it — show my draft", CustomIds.Build(CustomIds.Draft, pendingId)))));
-
-    private static MessageComponent RenderMatchClosed(CandidateIssue match, Guid pendingId, string? notice) =>
-        Container(container => container
-            .WithTextDisplay(Budgeted(
-                Notice(notice) + $"**This looks like {Link(match)}, closed recently.** " +
-                "Is it still happening in the latest version?"))
-            .WithActionRow(row => row
-                .WithButton(ButtonBuilder.CreatePrimaryButton(
-                    "Still happening", CustomIds.Build(CustomIds.StillOpen, pendingId, match.Number)))
-                .WithButton(ButtonBuilder.CreateSecondaryButton(
-                    "Looks fixed", CustomIds.Build(CustomIds.Fixed, pendingId, match.Number)))));
-
     private static MessageComponent RenderUncertain(
         IReadOnlyList<CandidateIssue> candidates, Guid pendingId, string? notice)
     {
@@ -171,8 +152,7 @@ public static class OutcomeRenderer
             .Take(MaxListedIssues)
             .Select(c => new SelectMenuOptionBuilder(
                 Truncate($"#{c.Number} {Inline(c.Title)}", MaxLabelChars),
-                c.Number.ToString(),
-                c.State))
+                c.Number.ToString()))
             .ToList();
 
         return Container(container => container
@@ -188,6 +168,8 @@ public static class OutcomeRenderer
             .WithActionRow(row => row.WithButton(ButtonBuilder.CreateSecondaryButton(
                 "None of these — new issue", CustomIds.Build(CustomIds.Draft, pendingId)))));
     }
+
+    private static string TypeName(ReportType type) => type == ReportType.Bug ? "Bug report" : "Feature request";
 
     private static MessageComponent Message(string text) =>
         new ComponentBuilderV2().WithTextDisplay(Truncate(text, MaxBodyChars)).Build();

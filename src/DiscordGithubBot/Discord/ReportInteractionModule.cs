@@ -48,11 +48,12 @@ public class ReportInteractionModule(
 
     // --- slash commands ---
 
-    [SlashCommand("report-issue", "Report a bug in the app", runMode: RunMode.Sync)]
-    public Task ReportIssue() => OpenModalAsync(ReportType.Bug);
-
-    [SlashCommand("request-feature", "Request a new feature", runMode: RunMode.Sync)]
-    public Task RequestFeature() => OpenModalAsync(ReportType.Feature);
+    /// <summary>
+    /// The one reporting command. Whether the report is a bug or a feature request is no longer the
+    /// reporter's call: the decision model reads the report and decides (see <c>ReportClassifier</c>).
+    /// </summary>
+    [SlashCommand("issue", "Report a bug or request a feature", runMode: RunMode.Sync)]
+    public Task Issue() => OpenModalAsync();
 
     [SlashCommand("issues", "List open GitHub issues", runMode: RunMode.Sync)]
     public async Task Issues([Summary(description: AppOptionDescription)] string? app = null)
@@ -80,8 +81,8 @@ public class ReportInteractionModule(
 
     // --- modal submit ---
 
-    [ModalInteraction("report-modal|*|*", runMode: RunMode.Sync)]
-    public async Task OnReportModal(string typeToken, string repoToken, ReportModal modal)
+    [ModalInteraction("report-modal|*", runMode: RunMode.Sync)]
+    public async Task OnReportModal(string repoToken, ReportModal modal)
     {
         // The three-second acknowledgement deadline comes before everything else, including the download.
         await DeferAsync(ephemeral: true);
@@ -98,8 +99,6 @@ public class ReportInteractionModule(
             return;
         }
 
-        var type = typeToken == "bug" ? ReportType.Bug : ReportType.Feature;
-
         // Downloaded before the slow work: Discord's attachment URLs expire, the reporter's bytes must not.
         var (payloads, skipped) = await downloader.DownloadAsync(modal.Screenshots ?? []);
         var notice = skipped.Count == 0
@@ -113,7 +112,7 @@ public class ReportInteractionModule(
             // so Guild is set on every path that reaches here; the null-conditional is belt and braces,
             // and an empty name simply drops the server half of the GitHub footer.
             outcome = await pipeline.ProcessAsync(new ReportSubmission(
-                app, type, Context.User.Id, Context.User.GlobalName ?? Context.User.Username,
+                app, Context.User.Id, Context.User.GlobalName ?? Context.User.Username,
                 Context.Guild?.Name ?? "", modal.Description, payloads));
         }
         catch (NormalizationException ex)
@@ -156,7 +155,7 @@ public class ReportInteractionModule(
     // re-read through CustomIds.TryParse so that one validated codec decides what a click means.
 
     [ComponentInteraction("rep|create|*|*", runMode: RunMode.Sync)]
-    public Task OnCreate(string pendingSegment, string issueSegment) => RunAsync(async (id, regressionOf) =>
+    public Task OnCreate(string pendingSegment, string issueSegment) => RunAsync(async (id, _) =>
     {
         // Peeked before the create call: creating deletes the pending report, and the announcement needs
         // to know which app (and which reporter) it belongs to.
@@ -167,7 +166,7 @@ public class ReportInteractionModule(
             return;
         }
 
-        var issue = await pipeline.CreateIssueAsync(id, regressionOf == 0 ? null : regressionOf);
+        var issue = await pipeline.CreateIssueAsync(id);
 
         var app = options.AppByRepo(pending.RepoKey);
         if (app is null) logger.LogWarning("No app configured for {Repo}; skipping the announcement.", pending.RepoKey);
@@ -192,23 +191,7 @@ public class ReportInteractionModule(
 
     [ComponentInteraction("rep|draft|*|*", runMode: RunMode.Sync)]
     public Task OnDraft(string pendingSegment, string issueSegment) =>
-        RunAsync((id, _) => ShowDraftAsync(id, regressionOf: 0, heading: null));
-
-    [ComponentInteraction("rep|stillopen|*|*", runMode: RunMode.Sync)]
-    public Task OnStillOpen(string pendingSegment, string issueSegment) =>
-        RunAsync((id, issueNumber) => ShowDraftAsync(
-            id, issueNumber, $"**Filing a new issue that references #{issueNumber}:**"));
-
-    [ComponentInteraction("rep|fixed|*|*", runMode: RunMode.Sync)]
-    public Task OnFixed(string pendingSegment, string issueSegment) => RunAsync(async (id, issueNumber) =>
-    {
-        // The repository is read before cancelling, because cancelling drops the row that holds it.
-        var pending = await pipeline.PeekAsync(id);
-        await pipeline.CancelAsync(id);
-
-        if (pending is null) await FollowupEphemeralAsync(CancelledMessage);
-        else await FollowupEphemeralAsync(OutcomeRenderer.RenderFixed(pending.RepoKey, issueNumber));
-    });
+        RunAsync((id, _) => ShowDraftAsync(id, heading: null));
 
     [ComponentInteraction("rep|pick|*|*", runMode: RunMode.Sync)]
     public Task OnPick(string pendingSegment, string issueSegment, string[] selections) => RunAsync(async (id, _) =>
@@ -227,7 +210,7 @@ public class ReportInteractionModule(
         if (candidate is null)
         {
             logger.LogWarning("Picked issue #{Number} is not a candidate of pending report {PendingId}.", picked, id);
-            await ShowDraftAsync(id, regressionOf: 0, heading: "**I couldn't find that issue — here's your draft:**");
+            await ShowDraftAsync(id, heading: "**I couldn't find that issue — here's your draft:**");
             return;
         }
 
@@ -236,7 +219,7 @@ public class ReportInteractionModule(
 
     // --- shared flow ---
 
-    private async Task OpenModalAsync(ReportType type)
+    private async Task OpenModalAsync()
     {
         if (Context.Guild is null)
         {
@@ -254,15 +237,14 @@ public class ReportInteractionModule(
         // The chosen repository rides along in the modal's custom id, so the submit handler needs no
         // state. With several apps the choice hasn't been made yet: a placeholder token rides instead,
         // and a dropdown of the guild's apps goes on top of the form.
-        var typeToken = type == ReportType.Bug ? "bug" : "feature";
         if (app is not null)
         {
-            await RespondWithModalAsync<ReportModal>($"report-modal|{typeToken}|{app.Repo}");
+            await RespondWithModalAsync<ReportModal>($"report-modal|{app.Repo}");
             return;
         }
 
         await RespondWithModalAsync<ReportModal>(
-            $"report-modal|{typeToken}|{ReportModal.PickAppToken}",
+            $"report-modal|{ReportModal.PickAppToken}",
             modifyModal: modal => modal.Components.Insert(0, ReportModal.BuildAppPicker(choices!)));
     }
 
@@ -353,7 +335,7 @@ public class ReportInteractionModule(
         }
     }
 
-    private async Task ShowDraftAsync(Guid id, int regressionOf, string? heading)
+    private async Task ShowDraftAsync(Guid id, string? heading)
     {
         var pending = await pipeline.PeekAsync(id);
         if (pending is null)
@@ -363,7 +345,7 @@ public class ReportInteractionModule(
         }
 
         await FollowupEphemeralAsync(OutcomeRenderer.RenderDraftPreview(
-            new IssueDraft(pending.DraftTitle, pending.DraftBody), id, regressionOf, heading));
+            new IssueDraft(pending.DraftTitle, pending.DraftBody), pending.Type, id, heading));
     }
 
     /// <summary>Posts the public announcement in every channel the app is configured for; never throws.</summary>

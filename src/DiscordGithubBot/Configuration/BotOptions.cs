@@ -7,13 +7,6 @@ public sealed class DiscordOptions
     public string Token { get; set; } = "";
 }
 
-public sealed class OpenAIOptions
-{
-    public string ApiKey { get; set; } = "";
-    public string ChatModel { get; set; } = "gpt-5.6-luna";
-    public string EmbeddingModel { get; set; } = "text-embedding-3-small";
-}
-
 /// <summary>
 /// Every model call the bot makes goes through OpenRouter: chat completions for text it has to write, the
 /// Decisions API for judgments it has to make. Both models are pinned here, never aliased — a decision
@@ -126,7 +119,6 @@ public sealed class GitHubAppAuth
 public sealed class BotOptions
 {
     public DiscordOptions Discord { get; set; } = new();
-    public OpenAIOptions OpenAI { get; set; } = new();
     public OpenRouterOptions OpenRouter { get; set; } = new();
     public DatabaseOptions Database { get; set; } = new();
     public List<AppConfig> Apps { get; set; } = new();
@@ -140,9 +132,7 @@ public sealed class BotOptions
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(Discord.Token)) errors.Add("Discord:Token is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.ApiKey)) errors.Add("OpenAI:ApiKey is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.ChatModel)) errors.Add("OpenAI:ChatModel is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.EmbeddingModel)) errors.Add("OpenAI:EmbeddingModel is required.");
+        errors.AddRange(ValidateOpenRouter(OpenRouter));
         if (string.IsNullOrWhiteSpace(Database.Path)) errors.Add("Database:Path is required.");
         if (Apps.Count == 0) errors.Add("Apps: at least one app must be configured.");
 
@@ -167,6 +157,18 @@ public sealed class BotOptions
         errors.AddRange(dupes.Select(g => $"Apps: duplicate Repo '{g.Key}'."));
 
         return errors;
+    }
+
+    private static IEnumerable<string> ValidateOpenRouter(OpenRouterOptions o)
+    {
+        if (string.IsNullOrWhiteSpace(o.ApiKey)) yield return "OpenRouter:ApiKey is required.";
+        if (string.IsNullOrWhiteSpace(o.ChatModel)) yield return "OpenRouter:ChatModel is required.";
+        if (string.IsNullOrWhiteSpace(o.DecisionModel)) yield return "OpenRouter:DecisionModel is required.";
+        // A "~vendor/model-latest" alias moves to a new build without notice, and every decision threshold
+        // in this bot was set against the probabilities of one particular build.
+        else if (o.DecisionModel.TrimStart().StartsWith('~'))
+            yield return $"OpenRouter:DecisionModel: '{o.DecisionModel}' is an alias; pin a model id such as typesafe/jev-1.13.";
+        if (o.ChatDeadlineSeconds <= 0) yield return "OpenRouter:ChatDeadlineSeconds must be positive.";
     }
 
     /// <summary>

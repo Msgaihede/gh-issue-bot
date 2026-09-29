@@ -12,7 +12,7 @@ public class HostSetupTests
 {
     private static BotOptions Options() => new()
     {
-        Discord = new() { Token = "t" }, OpenAI = new() { ApiKey = "k" },
+        Discord = new() { Token = "t" }, OpenRouter = new() { ApiKey = "k" },
         Database = new() { Path = Path.Combine(Path.GetTempPath(), $"di-test-{Guid.NewGuid():N}.db") },
         Apps = [new AppConfig { Name = "A", Repo = "o/r", GitHubToken = "p", GuildIds = [1UL], ChannelIds = [2UL] }],
     };
@@ -116,6 +116,6 @@ public class HostSetupTests
         var modules = await interactions.AddModulesAsync(typeof(BotService).Assembly, scope.ServiceProvider);
 
         Assert.NotEmpty(modules);
-        Assert.Equal(3, interactions.SlashCommands.Count);
+        Assert.Equal(2, interactions.SlashCommands.Count);
     }
 }

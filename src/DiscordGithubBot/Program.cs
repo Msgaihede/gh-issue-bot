@@ -2,7 +2,6 @@ using DiscordGithubBot;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,6 +14,11 @@ if (Directory.Exists("/run/secrets"))
     builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
 
 var options = builder.Configuration.Get<BotOptions>() ?? new BotOptions();
+
+// The OpenAI section went away when every model call moved to OpenRouter; a deployment still carrying it
+// would otherwise fail on the missing OpenRouter key without saying why the old key stopped counting.
+if (builder.Configuration.GetSection("OpenAI").GetChildren().Any())
+    Console.Error.WriteLine("CONFIG WARNING: the OpenAI section is no longer read; configure OpenRouter:ApiKey instead.");
 var errors = options.Validate();
 if (errors.Count > 0)
 {
@@ -30,9 +34,12 @@ builder.Services.AddBotServices(options);
 
 using var host = builder.Build();
 
-// The bot ships no migrations: it owns its SQLite file and materializes the schema on every start.
+// The bot ships no migrations: it owns its SQLite file, and a schema from another build is rebuilt.
 using (var scope = host.Services.CreateScope())
-    scope.ServiceProvider.GetRequiredService<BotDbContext>().Database.EnsureCreated();
+{
+    if (DatabaseSchema.EnsureCurrent(scope.ServiceProvider.GetRequiredService<BotDbContext>()))
+        Console.WriteLine($"Database schema was out of date; rebuilt it at version {DatabaseSchema.Version}.");
+}
 
 // one-shot smoke test for the unofficial upload endpoint: dotnet run -- --smoke-upload owner/repo
 if (args is ["--smoke-upload", var repo])
