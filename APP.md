@@ -59,11 +59,16 @@ publicly in the app's configured channel(s).
 5. **Review (Jev), in parallel with dedup.** One decision request picks the
    title that best describes the body for someone scanning the issue list,
    and asks, label by label, whether each of the repository's own labels
-   applies (read live from GitHub). Triage labels — `duplicate`, `invalid`,
-   `wontfix`, `won't fix`, `good first issue`, `help wanted` — are never
-   offered (per-app `IgnoredLabels` replaces that list), and the repository's
-   own type label (`bug`; `enhancement`/`feature`/`feature request`) is always
-   attached when it exists.
+   applies (read live from GitHub). Every label is judged by its **name and
+   its description**, with the whole label set in view, so it works with any
+   repository's labels, whatever they are called. Several can apply at once,
+   e.g. `bug`, `large` and `clarification needed`. The same request asks which
+   label the repository uses for the classified type (`bug`, `type: defect`,
+   `kind/feature`, …, or none), and that label is always attached. Triage
+   labels — `duplicate`, `invalid`, `wontfix`, `won't fix`,
+   `good first issue`, `help wanted` — are never offered (per-app
+   `IgnoredLabels` replaces that list). If the call fails, the first title
+   ships with the repository's `bug` / `enhancement` label, if it has one.
 6. **Duplicate check (Jev), against open issues only.** The bot keeps a cached
    copy of the repository's open issues (incremental sync per report, full
    resync daily). Jev first reads every open issue's title and opening — in
@@ -281,12 +286,12 @@ per million input tokens with free output.
 | --- | --- |
 | Jev: type | $0.00006 |
 | Luna: draft (reasoning medium) | $0.0005 |
-| Jev: title + 40 labels | $0.0002 |
+| Jev: title + type label + 40 labels | $0.0003 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
 | Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
-| **Total** | **≈ $0.0035** |
+| **Total** | **≈ $0.0036** |
 
-1000 reports a month come to about **$3.50** on flex, about $5 if every chat
+1000 reports a month come to about **$3.60** on flex, about $5 if every chat
 call fell back to the regular tier, and code context no longer grows with the
 size of the repository. Keeping the repository map current adds cents (a
 first build of mtg-grimoire's 1,551 files was $0.19 of summaries plus $0.004
@@ -311,17 +316,20 @@ one account from spending the budget.
 
 ### Tuning the decisions
 
-Every decision gate — labels at P ≥ 0.5, duplicates offered at P(same) ≥ 0.5
-and asked about at ≥ 0.2, shortlist floors at 0.05 — is a default set before
-any real data was seen. Run representative reports through
+Every decision gate — labels at P ≥ 0.5, the type label at P ≥ 0.5,
+duplicates offered at P(same) ≥ 0.5 and asked about at ≥ 0.2, shortlist
+floors at 0.05 — is a default set before any real data was seen. Run
+representative reports through
 
 ```
 dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "the report text"
 ```
 
 It refreshes the app's repository map, then prints the type, every drafted
-title with the chosen one marked, the labels, the duplicate verdict with its
-shortlist, the body, the code context and the AI cost — and, above that, each
+title with the chosen one marked, the labels — every label Jev was asked
+about with its probability, the attached ones marked and the type label
+named — the duplicate verdict with its shortlist, the body, the code context
+and the AI cost — and, above that, each
 Jev decision's raw probabilities (Debug log). It stores no report and posts
 nothing to Discord or GitHub (it does update the issue cache and the map).
 Adjust the named constants in `DuplicateFinder`, `DraftReviewer`,
@@ -603,7 +611,8 @@ configured app. Enable **User Install** in the Developer Portal first.
 1. **Dry run.** `dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "…"`
    with a clear bug, a clear feature request, a near-copy of an open issue and
    an off-topic message. Check the type, the chosen title (specific, not
-   generic), the labels, the duplicate verdict and the code context, and read
+   generic), the labels (every one that fits, not just one, and the right
+   type label), the duplicate verdict and the code context, and read
    the raw probabilities in the Debug lines. The first run builds the
    repository map — expect its summary line and a few cents of cost.
 2. **Modal.** Run `/issue` in the guild. The modal opens immediately, with no

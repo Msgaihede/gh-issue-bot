@@ -109,10 +109,15 @@ issue list. A Jev failure falls back to the first candidate.
 Labels are read live from the repo (`GET /labels`, paginated). Triage
 outcomes a maintainer decides — `duplicate`, `invalid`, `wontfix`,
 `good first issue`, `help wanted` — are never offered (per-app override:
-`IgnoredLabels`). One `noul` per remaining label (cap 100), threshold 0.5.
-The repo's canonical type label (`bug`; `enhancement`/`feature`) is always
-added when it exists, so the type decision and the labels cannot disagree
-about the basics.
+`IgnoredLabels`). One `noul` per remaining label (cap 100), threshold 0.5;
+every label is judged by its name and its description, and the whole label
+set (names + descriptions) sits in state as `repository.labels`, so any
+repository's custom labels work and several can apply at once. One `choice`
+over the same labels (plus "none") names the label the repo marks the
+classified type with; at P ≥ 0.5 it is always added, so the type decision
+and the labels cannot disagree about the basics. A failed call falls back to
+a conventionally named type label (`bug`; `enhancement`/`feature`). (Amended
+by decision 105.)
 
 ### Dedup (open issues only)
 The issue cache keeps **open** issues only (title, URL, first 2500
