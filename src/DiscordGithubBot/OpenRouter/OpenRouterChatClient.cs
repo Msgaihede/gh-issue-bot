@@ -192,7 +192,7 @@ public sealed class OpenRouterChatClient(
         };
 
         if (!string.IsNullOrWhiteSpace(o.ReasoningEffort))
-            request["reasoning"] = new JsonObject { ["effort"] = o.ReasoningEffort };
+            request["reasoning"] = new JsonObject { ["effort"] = o.ReasoningEffort.Trim() };
 
         // require_parameters keeps a fallback from landing on a host that would ignore the JSON schema;
         // service-tier endpoints such as openai/flex are only ever used when named here explicitly.

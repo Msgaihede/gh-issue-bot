@@ -189,7 +189,7 @@ $0.25/M out (regular 2×); Jev 1.13 $0.042/M in, output free.
 | Step | Tokens (typical) | Cost |
 |---|---|---|
 | Jev type | 1.5k in | $0.00006 |
-| Luna draft (reasoning low) | 2k in / 1.2k out | $0.0004 |
+| Luna draft (reasoning medium) | 2k in / 1.5k out | $0.0005 |
 | Jev review (40 labels) | 4k in | $0.00017 |
 | Jev dedup (200 open issues) | 28k in | $0.0012 |
 | Code context (search terms, embedding, Jev over 50 candidates, notes), 70% of reports | ~6k Jev + ~26k/0.7k Luna | $0.0020 |

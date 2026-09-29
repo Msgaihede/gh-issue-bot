@@ -48,8 +48,14 @@ public sealed class OpenRouterOptions
     /// </summary>
     public int ChatDeadlineSeconds { get; set; } = 30;
 
-    /// <summary>OpenRouter <c>reasoning.effort</c> for chat calls; empty leaves the model's default.</summary>
-    public string ReasoningEffort { get; set; } = "low";
+    /// <summary>The <c>reasoning.effort</c> values OpenRouter accepts.</summary>
+    public static readonly IReadOnlyList<string> ReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    /// <summary>
+    /// OpenRouter <c>reasoning.effort</c> for every chat call (env var <c>OpenRouter__ReasoningEffort</c>); one of
+    /// <see cref="ReasoningEfforts"/>, or empty to leave the model's own default.
+    /// </summary>
+    public string ReasoningEffort { get; set; } = "medium";
 
     /// <summary>Decision (System One) model for every judgment: type, title, labels, dedup, file selection.</summary>
     public string DecisionModel { get; set; } = "typesafe/jev-1.13";
@@ -197,6 +203,11 @@ public sealed class BotOptions
         else if (o.DecisionModel.TrimStart().StartsWith('~'))
             yield return $"OpenRouter:DecisionModel: '{o.DecisionModel}' is an alias; pin a model id such as typesafe/jev-1.13.";
         if (string.IsNullOrWhiteSpace(o.EmbeddingModel)) yield return "OpenRouter:EmbeddingModel is required.";
+        // Checked here rather than left to the first report: OpenRouter rejects an unknown effort with a 400,
+        // which would fail every draft until someone read the logs.
+        if (!string.IsNullOrWhiteSpace(o.ReasoningEffort) && !OpenRouterOptions.ReasoningEfforts.Contains(o.ReasoningEffort.Trim()))
+            yield return $"OpenRouter:ReasoningEffort: '{o.ReasoningEffort}' must be one of " +
+                         $"{string.Join(", ", OpenRouterOptions.ReasoningEfforts)} (or empty for the model's default).";
         if (o.ChatDeadlineSeconds <= 0) yield return "OpenRouter:ChatDeadlineSeconds must be positive.";
     }
 

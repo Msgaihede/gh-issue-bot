@@ -1454,3 +1454,21 @@ below record the choices inside it that are not obvious from the code.
     its code context, duplicates and cancellations included — about $0.002
     each — which the budget absorbs. Schema v7 adds the two columns as an
     additive upgrade.
+
+99. **GPT-6 Luna runs at reasoning effort `medium`, set by
+    `OpenRouter__ReasoningEffort`.** Before choosing, drafts for eight real
+    user-worded reports and code notes for four of them were generated at
+    `none`, `low` and `medium` (same model, prompts and file picks) and read
+    side by side in the session — no model graded them, at the owner's
+    request — with five code-note claims checked against mtg-grimoire's
+    source (all true). No level invented anything and every title was
+    specific. `none` was fastest (drafts ~2.2 s on the regular tier) but
+    skipped the Steps/Actual sections in all three bug reports, kept the
+    reporter's first person, and failed one of four code-notes calls. `low`
+    (~3.3 s) and `medium` (~4.0 s) were equally good; `medium` fills in
+    implied reproduction steps a little more often and notes took ~17.6 s
+    against ~12 s. The owner chose `medium`: the draft's extra ~0.7 s is
+    small, and the code notes now run in the background (decision 98). The
+    setting was already configurable; it now defaults to `medium`, appears in
+    `.env.example`, and an unknown value fails startup, since OpenRouter
+    would answer it with a 400 on every call.

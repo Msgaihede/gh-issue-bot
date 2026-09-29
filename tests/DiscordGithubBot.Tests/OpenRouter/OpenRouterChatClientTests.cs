@@ -51,7 +51,7 @@ public class OpenRouterChatClientTests
 
     /// <summary>Flex first, regular second: the half-price tier is the default, not an opt-in.</summary>
     [Fact]
-    public async Task Requests_flex_first_with_fallbacks_a_strict_schema_and_low_reasoning()
+    public async Task Requests_flex_first_with_fallbacks_a_strict_schema_and_medium_reasoning()
     {
         _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
@@ -62,7 +62,7 @@ public class OpenRouterChatClientTests
         Assert.Equal(["openai/flex", "openai"], body["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.True(body["provider"]!["allow_fallbacks"]!.GetValue<bool>());
         Assert.True(body["provider"]!["require_parameters"]!.GetValue<bool>());
-        Assert.Equal("low", body["reasoning"]!["effort"]!.GetValue<string>());
+        Assert.Equal("medium", body["reasoning"]!["effort"]!.GetValue<string>());
 
         var format = body["response_format"]!["json_schema"]!;
         Assert.Equal("test_answer", format["name"]!.GetValue<string>());

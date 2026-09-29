@@ -54,6 +54,40 @@ public class BotOptionsTests
         Assert.Contains(o.Validate(), e => e.Contains("alias"));
     }
 
+    [Theory]
+    [InlineData("none")]
+    [InlineData("low")]
+    [InlineData("medium")]
+    [InlineData("xhigh")]
+    [InlineData("")]
+    public void Known_reasoning_efforts_and_empty_are_accepted(string effort)
+    {
+        var o = Valid(); o.OpenRouter.ReasoningEffort = effort;
+        Assert.Empty(o.Validate());
+    }
+
+    /// <summary>OpenRouter answers an unknown effort with a 400 on every draft; startup is the place to catch it.</summary>
+    [Theory]
+    [InlineData("med")]
+    [InlineData("Medium!")]
+    public void An_unknown_reasoning_effort_is_rejected(string effort)
+    {
+        var o = Valid(); o.OpenRouter.ReasoningEffort = effort;
+        Assert.Contains(o.Validate(), e => e.Contains("OpenRouter:ReasoningEffort"));
+    }
+
+    [Fact]
+    public void The_reasoning_effort_defaults_to_medium_and_is_set_by_its_env_var()
+    {
+        Assert.Equal("medium", new OpenRouterOptions().ReasoningEffort);
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["OpenRouter:ReasoningEffort"] = "low",
+        }).Build();
+        Assert.Equal("low", config.Get<BotOptions>()!.OpenRouter.ReasoningEffort);
+    }
+
     [Fact]
     public void A_non_positive_chat_deadline_is_rejected()
     {

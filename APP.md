@@ -232,8 +232,16 @@ the regular tier). The **draft** goes to `RegularProviders` directly: the
 reporter waits on it before seeing anything, and flex more than doubled it
 (7.2 s against 3.2 s measured), for a saving of about $0.0002 a report.
 Search terms, code notes, duplicate comments and the repository map stay on
-flex; background work waits out the queue. Reasoning effort defaults to
-`low`.
+flex; background work waits out the queue.
+
+**Reasoning effort** is `medium` for every GPT-6 Luna call, set by
+`OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
+model's own default; anything else fails startup. Read side by side on real
+reports, `low` and `medium` wrote equally good drafts and code notes (`medium`
+fills in reproduction steps a little more often; drafts ~4.0 s against
+~3.3 s on the regular tier), while `none` skipped bug-template sections and
+failed one code-notes call in four.
 
 **Pinned models.** `DecisionModel` must be a versioned id — startup rejects a
 `~…-latest` alias, because every decision threshold belongs to one build.
@@ -248,7 +256,7 @@ per million input tokens with free output.
 | Per report (typical) | Cost |
 | --- | --- |
 | Jev: type | $0.00006 |
-| Luna: draft (reasoning low) | $0.0004 |
+| Luna: draft (reasoning medium) | $0.0005 |
 | Jev: title + 40 labels | $0.0002 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
 | Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
@@ -316,7 +324,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
     "ChatProviders": ["openai/flex", "openai"],
     "RegularProviders": ["openai"],
     "ChatDeadlineSeconds": 30,
-    "ReasoningEffort": "low",
+    "ReasoningEffort": "medium",
     "DecisionModel": "typesafe/jev-1.13",
     "EmbeddingModel": "voyageai/voyage-4"
   },
