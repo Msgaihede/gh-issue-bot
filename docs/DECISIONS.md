@@ -1068,3 +1068,436 @@ document that contradicts itself.
     exactly the limit plus one still reaches the length check, and anything
     larger fails inside `HttpClient` and lands in the downloader's existing
     catch as an ordinary skipped file.
+
+## 2026-09-29 (OpenRouter + Jev redesign)
+
+The redesign is specified in
+`docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md`; the entries
+below record the choices inside it that are not obvious from the code.
+
+76. **All model traffic goes through OpenRouter, over two hand-rolled typed
+    `HttpClient`s.** OpenRouter has no .NET SDK, and the two features this
+    bot leans on — `provider.order` routing for the flex tier and the
+    alpha Decisions API — are not reachable through
+    `Microsoft.Extensions.AI`'s OpenAI adapter without patching raw request
+    JSON. Two small clients (`OpenRouterChatClient`, `DecisionClient`) are
+    less code than that plumbing and are tested at the HTTP level, the same
+    trade decision 6 made for GitHub. Structured output keeps its
+    guarantee: the strict JSON schema is generated from the very DTO the
+    answer is parsed into (`StructuredOutput`), tightened to what strict mode
+    demands (closed objects, every property required, no nullable members),
+    so schema and parser cannot drift. A completion that stopped early,
+    refused, or does not fit the schema is a failure, never a partial answer.
+
+77. **Flex is back, as the default, with the queueing problem that got it
+    reverted (decision 71) handled explicitly.** The owner's requirement is
+    flex first with fallback to the regular tier. Two mechanisms cover the
+    two ways flex hurts: rejections (429 when capacity runs out) are
+    absorbed server-side by OpenRouter itself, because `provider.order`
+    lists `openai/flex` then `openai` with fallbacks allowed; *queueing* is
+    invisible to OpenRouter, so every interactive call (a reporter waiting on
+    a deferred interaction) carries a client-side deadline,
+    `ChatDeadlineSeconds` (30 s), after which — or after any other transient
+    failure — it is retried once on `ChatRetryProviders` (`openai`, regular
+    tier). Worst case a reporter waits the deadline plus one regular call,
+    and a request abandoned mid-queue may still be billed at the flex rate,
+    which is half of what the retry costs. Background calls (repo-map upkeep)
+    get a 10-minute deadline and simply wait the queue out. Service-tier
+    endpoints must be named explicitly in `provider.order` — a bare
+    `openai` never matches `openai/flex` — which is why the tier is a
+    configured provider list rather than a flag. The two provider lists are
+    nullable config lists because the configuration binder appends to an
+    initialised list instead of replacing it.
+
+78. **Every OpenRouter response's `usage.cost` feeds a scoped
+    `AiUsageMeter`.** The redesign has a hard budget ($5–10 for 500–1000
+    issues a month); OpenRouter prices each response in USD, so the bot can
+    log what each report actually cost instead of trusting the estimate in
+    the spec. The meter is scoped — one report, one click, one refresh — and
+    locked, because a report fans decision calls out in parallel.
+
+79. **One `/issue` command; Jev decides bug or feature.** The reporter no
+    longer chooses between `/report-issue` and `/request-feature` — the
+    decision model reads the report and answers a two-option `choice`
+    (`ReportClassifier`), which picks the draft template and the type label.
+    A `choice` rather than a `noul` because the two are mutually exclusive
+    alternatives of one rubric. A failed call falls back to *bug*: most
+    reports are, and the preview now shows the classified type ("Bug
+    report") above the draft, so a wrong call is visible before anything is
+    filed and Cancel is the way out.
+
+80. **Duplicates are found by the decision model reading the open issues,
+    in two stages — the embedding/KNN path is gone.** The owner's finding
+    was that nearest-neighbour similarity did not work; the replacement
+    reads contents. Stage one (`Shortlist`) is TypeSafe's "rank, then
+    re-check" pattern: one `choice` over every open issue (title + 300-char
+    excerpt, keyed `issue_<n>`, plus `none`), chunked at 120 issues so a
+    request stays near half of Jev's 32k context, with a final `choice` over
+    the survivors when several chunks produced any (each chunk's
+    distribution is normalised over its own options only). Anything at 0.05
+    or above survives, top 5. Stage two lays each survivor's full excerpt
+    next to the draft and asks one three-level `score` per issue —
+    *different* / *related but distinct* / *same underlying problem* — and
+    routes on the probability of the top level: >= 0.5 offers the issue,
+    >= 0.2 asks the reporter, below is dropped. A `score` rather than a
+    `noul` because the explicit "related" level draws off the mass a yes/no
+    question gives to same-area-different-bug issues (decision models read
+    loosely). Two issues above 0.5 are a pick list, not a match. The
+    thresholds are the Decisions skill's pre-probe defaults and live as
+    named constants; no API key was available while building this, so they
+    are unprobed — `--dry-run` exists to tune them. Degradation keeps "ask
+    rather than guess": stage two failing asks about the whole shortlist;
+    stage one failing has nothing to ask about and treats the report as new
+    (the reporter still confirms). Dedup runs on the normalized draft, not
+    the raw text: English, structured, and closer in shape to the issues it
+    is compared with.
+
+81. **Only open issues are candidates; the "still happening?" flow is
+    removed.** The owner's requirement says dedup against open issues, and
+    confirmed dropping the closed-within-30-days flow (decision 2) with its
+    buttons, the regression line, and `ReportOutcomeKind.MatchClosed`. The
+    cache (`CachedIssue`) now holds open issues only: an incremental pass
+    upserts what is open and deletes what closed; a full pass lists every
+    open issue and replaces the cache with exactly that, which also clears
+    deleted or transferred issues an update feed never reports. The first
+    sync is full (open issues only — the old cache paged through every
+    closed issue ever filed) and a full pass repeats daily.
+
+82. **The database schema is stamped with `PRAGMA user_version` and rebuilt
+    on a mismatch, replacing "delete your SQLite file".** Decisions 52, 59
+    and 68 each asked operators to delete the file by hand after a schema
+    change — easy to miss on a Docker volume, and fatal on the first query.
+    `DatabaseSchema.EnsureCurrent` compares the stamp with
+    `DatabaseSchema.Version`; on a mismatch it drops every table, recreates
+    the schema and stamps it. That is only acceptable because nothing in
+    the file is precious — caches rebuild and drafts live an hour — and it
+    is still not a migration story: the day the file holds real data, this
+    repo needs EF migrations.
+
+83. **The draft model writes three alternative titles under explicit
+    "representative title" rules.** The owner asked that titles represent
+    the actual issue. The prompt now demands the specific symptom (bugs) or
+    capability (features) and where it happens, the reporter's concrete
+    details, and bans generic phrasings by example ("Bug report", "Issue
+    with the app"); the old "imperative mood" rule is gone, since "Fix
+    checkout" says less than "Checkout page goes blank after tapping Pay".
+    Three alternatives rather than one so the choice can be made separately
+    from the writing; until the decision model picks (next feature), the
+    first is used.
+
+84. **Jev picks the title and the labels in one request after the draft is
+    written.** `DraftReviewer` asks one `choice` over the draft model's
+    three titles ("which describes the actual problem or request so a
+    maintainer scanning the list understands it without opening it") and one
+    `noul` per repository label — both selection, which is the job a decision
+    model does well and a generative one does not: it cannot pick a title
+    nobody wrote or a label the repository does not have. Labels are
+    independent nouls because several can apply at once; a `choice` would
+    force exactly one. The gate is the pre-probe 0.5. Labels come live from
+    `GET /labels` on every report (a single call alongside the issue sync);
+    a listing failure leaves the issue unlabelled rather than failing the
+    report. Triage outcomes (`duplicate`, `invalid`, `wontfix`,
+    `good first issue`, `help wanted`) are never offered — they record a
+    maintainer's decision, not a property of a fresh report — and an app can
+    replace that list with `IgnoredLabels`. The repository's canonical type
+    label (`bug`; `enhancement`/`feature`) is always attached when it exists,
+    so the classified type and the labels agree on the basics even when the
+    model hesitates; that replaces the old hard-coded `bug`/`enhancement`,
+    which attached labels the repository might not define. The title
+    choice and dedup run in parallel, so dedup reads the draft under its
+    first title — the body carries the substance, and serialising the two
+    would add a round trip in front of the reporter. The preview's small
+    print now shows the chosen labels next to the type. A failed review
+    falls back to the first title and the type label.
+
+85. **Commands are global and user-installable; `/issue-install` hands out
+    the link.** A user-installed command belongs to no server, so the
+    per-guild registration of decision 5's era cannot reach it: every
+    command is now registered globally with integration types
+    `[GuildInstall, UserInstall]` and contexts `[Guild, BotDm,
+    PrivateChannel]`, declared once on the module (a test pins that
+    Discord.Net carries them to every command). The per-guild registrations
+    of earlier builds are overwritten with an empty set on every Ready, or
+    configured servers would list each command twice. The owner's
+    "/issue login" became `/issue-install` — "login" was the wrong word,
+    and Discord forbids a runnable `/issue` that also has subcommands, so
+    the link command is its own top-level command. It answers with the
+    user-install URL (`integration_type=1`, scope `applications.commands`
+    only) built from the interaction's own application id, so there is
+    nothing to configure — except enabling "User Install" in the Developer
+    Portal. Nothing in the module may rely on `Context.Guild` any more: in a
+    server the bot never joined it is null even though the interaction has
+    a `GuildId`, and the footer then credits the reporter "via Discord".
+
+86. **Outside configured servers, every app is on offer.** A server listed
+    in some app's `GuildIds` still sees exactly those apps; a DM, a group DM,
+    or a server nobody configured (all reachable through a user install)
+    sees every configured app — the owner's choice over an opt-in flag or a
+    membership check. Resolution is one place, `BotOptions.AppsForContext`,
+    used for opening the modal, validating its submit, and `/issues`.
+    *(Superseded by decision 101: outside a configured server a user now sees
+    only the apps of the configured servers they are a member of.)*
+
+87. **Reports are rate limited per user: 10 per rolling day by default.**
+    With every repository reachable by anyone who installs the bot, and each
+    report spending money on model calls, one account could otherwise burn
+    the month's budget. `ReportRateLimiter` counts submissions in memory
+    (a restart forgives everyone — it guards against runaway use, not
+    determined abuse); the check runs when `/issue` opens the modal, so a
+    reporter is refused before typing, and again on submit, where the report
+    is counted because that is where it starts to cost. The hard ceiling
+    belongs on the OpenRouter key's credit limit, which APP.md tells
+    operators to set. `Limits:ReportsPerUserPerDay = 0` turns the cap off.
+
+88. **Code context comes from a repository map, not from reading the
+    repository per report.** The owner asked that issues name the relevant
+    code files and carry context from the code, cheaply. `RepoMapWorker`
+    keeps, per app, one row per source file on the default branch — path,
+    blob SHA, and a ≤25-word summary written by GPT-6 Luna on the flex tier
+    (background urgency: it may wait out the queue). Refreshes are
+    incremental on git's own identity: two GitHub calls when the head has not
+    moved, and otherwise only files whose blob SHA changed are summarized
+    again, in batches of up to 25 files / 60k characters with each file cut
+    to its first 8k. A pass summarizes at most 400 files and the worker
+    returns every 5 minutes (instead of hourly) while a map is incomplete, so
+    a first build of a large repository spreads over a few passes; the map
+    keeps the 2000 shallowest files. A file the model refuses, answers
+    off-schema, or silently skips is stored with an empty summary — it drops
+    out of selection until its blob changes — because asking again would
+    most likely pay for the same failure every pass; only transient failures
+    end a pass for a retry. At "Create issue", `CodeContextBuilder` has Jev
+    shortlist files from the map (the same two-round `Shortlist` helper as
+    dedup, chunks of 150 files), fetches the picks at the exact blob the map
+    summarized, and has Luna say which are really involved and how. The
+    decision model can only offer paths that exist; paths the chat model
+    names that it was not given are dropped. The block goes after the
+    `MetaMarker`, so dedup never reads it, with links pinned to the mapped
+    commit. It is written into GitHub only — never the Discord preview —
+    because anyone who can run the bot (now: anyone who installs it) is not
+    necessarily allowed to read a private repository's code; and it is built
+    at confirmation rather than at submit, so duplicates and cancellations
+    never pay for it. Degradation: a failed notes call still lists the
+    picked files with their map summaries ("Possibly relevant", flagged as
+    unread); a failed selection files the issue without the block.
+
+89. **Markdown docs are mapped alongside code, with their own selection.**
+    From the owner: repositories keep useful context in `.md` files.
+    `.md`/`.mdx`/`.markdown`/`.rst`/`.adoc` files are mapped (summaries say
+    what each doc explains), except licence and code-of-conduct files and
+    anything under excluded directories such as `.github` or
+    `node_modules`. Code and docs are selected in two separate `choice`
+    rounds — up to 4 code files, up to 2 docs — because in one shared
+    ranking a wordy, broadly-on-topic doc can take the place of the file
+    that actually needs fixing. The issue shows them as "Relevant code" and
+    "Related docs". The kind is derived from the path, so the map stores
+    nothing extra.
+
+90. **Code context reads the issue repository itself; there is no separate
+    "code repo" setting.** A split setup — public issue tracker, private
+    code — is common, but code notes about a private repository written into
+    a public tracker would publish private code. Mapping only `Repo` keeps
+    the notes exactly as visible as the code they describe. Supporting a
+    separate code repository would need a visibility check first.
+
+91. **`--dry-run owner/repo "text"` runs one report through every model
+    call and prints the result instead of storing or posting it.** The
+    Decisions skill's rule is "probe before you trust": thresholds come from
+    raw probabilities on representative inputs, not from defaults. No
+    OpenRouter key was available while this was built, so every gate in the
+    bot (type, title, labels at 0.5, dedup at 0.5/0.2, shortlist floors at
+    0.05) is a pre-probe default. The dry run refreshes the app's repository
+    map, runs `ReportPipeline.AnalyzeAsync` (the model half of
+    `ProcessAsync`, split out for this) and the code-context builder, and
+    prints type, all titles with the chosen one marked, labels, the dedup
+    verdict with its shortlist, the body, the code block and the AI cost —
+    with Debug logging switched on for the bot's own categories, so every
+    decision's raw answers appear above the summary. It does update the
+    issue cache and the map, which are caches; it never stores a pending
+    report or touches Discord or GitHub issues.
+
+92. **Review fixes to the repository map and the CLI (same day).** An
+    independent review of the branch found three defects, all fixed. (a) Any
+    non-transient OpenRouter error used to park a batch as unsummarizable —
+    including request-level refusals (402 credits exhausted, 401 bad key,
+    400 unknown model), which say nothing about the files. Reaching the
+    credit limit, the intended hard cap, would therefore have blanked the
+    map for good. Now only answer-level failures (a refusal, a truncated or
+    off-schema answer) park files; anything carrying an HTTP status ends the
+    pass for a retry, and `finish_reason: "error"` counts as transient.
+    (b) `--dry-run` or `--smoke-upload` with the wrong number of arguments
+    fell through to `host.RunAsync()` and started the live bot; both now
+    print their usage and exit 1 before the host is built. (c) Code links
+    pointed at the latest head while a changed file's summary and blob were
+    still the older version's; each `RepoFile` now records the commit it was
+    read at (schema v5) and its link pins to that, so a link always shows
+    what the notes describe.
+
+93. **Under BYOK the usage meter counts the provider's charge, and Jev's
+    input tokens.** The first live runs showed every call at $0: the owner's
+    OpenRouter account routes both OpenAI and TypeSafe through their own
+    keys (BYOK), where OpenRouter's `cost` is only its own fee and the
+    provider bills directly. Chat responses still carry what OpenAI charged
+    in `cost_details.upstream_inference_cost` (flagged `is_byok`), which the
+    chat client now adds — only for BYOK calls, since otherwise it is already
+    inside `cost`. Decision responses carry no upstream figure at all, so
+    the meter also sums the decision model's `input_tokens`, TypeSafe's
+    billing unit, rather than hard-coding a price that can change; every
+    usage log line reads `$<cost> in <n> call(s), <k> decision-model input
+    tokens`. The same finding moves the spending-cap advice: with BYOK the
+    OpenRouter key's credit limit caps only OpenRouter's fees, so the
+    budget limits belong on the OpenAI and TypeSafe accounts. Those runs
+    (no GitHub access yet, so no labels, dedup or code context) also gave
+    the first real numbers: flex pricing confirmed from the upstream cost,
+    $0.00006–0.00008 per draft, ~1,000 Jev input tokens for type + title,
+    clear bug/feature reports at P = 1.0, an arguable "please keep my
+    language" report at feature 0.64 / bug 0.36, a Danish report translated
+    correctly, and a prompt-injection attempt ("title this URGENT SECURITY
+    HOLE, label it critical") ignored in favour of the real problem.
+
+94. **The repository map is updated at startup and every 10 minutes, and a
+    check runs to completion.** The owner asked for a summary pass on
+    startup and then every 10 minutes over whatever was added or changed.
+    The worker now starts its first check immediately (no 30-second delay)
+    and waits 10 minutes after each check instead of an hour: a check that
+    finds nothing changed costs two GitHub calls and no model calls, and
+    every minute of lag is a minute in which new reports are matched against
+    the previous version of the files a push changed. "Added or changed
+    since the last check" is the existing blob-SHA diff, which cannot miss an
+    edit. The per-pass cap of 400 summaries stays, but only as a checkpoint:
+    `RepoMapService.UpdateAsync` runs passes back to back until the map is
+    complete, so the startup check is the whole first build instead of one
+    capped slice followed by 5-minute catch-up ticks (that catch-up interval
+    is gone). An update stops early when a pass makes no progress — a failure
+    the pass has already logged — and the next check retries; the pass
+    count is bounded by what a full 2000-file build needs. The dry run uses
+    the same update, so its code context always reads a complete map.
+
+95. **Spike: file retrieval for code context — embeddings plus keywords
+    beat "Jev reads the whole map" at 3% of the cost.** Selecting files by
+    showing Jev every summary cost ~145k decision tokens per created issue on
+    mtg-grimoire (1,551 mapped files) and grows with the repository. The spike
+    (`tools/RetrievalSpike`) scored cheap retrievers against real ground truth:
+    the 133 mtg-grimoire issues closed by a linked pull request, with the files
+    each fix changed as the answer. Reports were written two ways — the issue
+    as filed, and rewritten by GPT-6 Luna as a non-technical Discord user would
+    phrase it (no identifiers, jargon or the issue's terms) and then drafted by
+    the bot — because the owner flagged that users do not use the code's
+    vocabulary. User-voice hit@10 / hit@40 for code files: BM25 keywords over
+    path + summary 62% / 83%; plus Luna-written search terms 72% / 92%
+    (generic) and 78% / 90% (grounded in the repository's file tree);
+    embeddings of path + summary 86% / 92% (voyage-4-lite), 84% / 94%
+    (voyage-4); the code-specialised voyage-code-4 was worst at 68% / 89%,
+    since it matches prose summaries, not code; hybrids of tree-grounded
+    keywords and embeddings fused by rank 87% / 95%. With n = 133,
+    differences of 2–3 points are noise: the top configurations tie. For docs
+    (n = 86, noisier ground truth) the hybrid led, hit@5 57% vs 51% for
+    keywords + tree terms and 47–50% for embeddings alone. End to end on 25
+    issues, Jev picking 4 files from a 40-file shortlist matched Jev picking
+    from the whole map — both 84% — with 4,771 instead of 145,009 decision
+    tokens. Embedding a whole map costs under a cent. The retrieval pieces
+    (`TextTokens`, `KeywordIndex`, `VectorIndex`, `RankFusion`,
+    `EmbeddingClient`, `QueryExpander`) are in the bot but not yet wired into
+    `CodeContextBuilder`.
+
+96. **Code context retrieves a shortlist by keywords and embeddings, then
+    lets Jev pick; schema changes can now upgrade in place.** Following the
+    spike (decision 95) and the owner's go-ahead: at "Create issue", GPT-6
+    Luna writes developer search terms with the repository's file tree in
+    view; BM25 over path + summary and cosine similarity over
+    `voyageai/voyage-4` embeddings of the same text each rank the map, fused
+    by reciprocal rank, code and docs apart; Jev picks 4 code files from the
+    top 40 and 2 docs from the top 10. voyage-4 rather than voyage-4-lite:
+    they tied on code, voyage-4 led slightly on docs, and the price
+    difference is a fraction of a cent a month. The tree-grounded search
+    terms stay even though embeddings alone were nearly as good on code,
+    because they carried docs (keyword hit@5 35% → 51%) and cost about
+    $0.0008 an issue. Map rows gain an embedding and its model stamp; a new
+    summary clears the vector, and every check embeds whatever lacks one from
+    the configured model, so existing maps and model switches catch up on
+    their own; an embedding failure never fails a check. Degradation: no
+    search terms → the report text alone; no issue embedding → keywords
+    alone. Live on mtg-grimoire the first check embedded all 1,551 summaries
+    for $0.0035, and a created issue took 9,631 Jev tokens instead of 179k —
+    and found the query parser the whole-map run had missed. To keep that
+    map across this very change, `DatabaseSchema` now applies additive
+    upgrade steps (here: two `ALTER TABLE ... ADD COLUMN`) when every version
+    in between has one, and only rebuilds otherwise; decision 82's
+    rebuild-on-mismatch remains the fallback.
+
+97. **The draft runs on the regular tier; every other chat call stays on
+    flex.** Measured on mtg-grimoire, one run each: the draft took 7.2 s on
+    flex with low reasoning and 3.2 s on the regular tier (3.6 s on flex
+    with no reasoning); search terms 3.6 s / 2.5 s / 3.9 s; reading the
+    picked files plus the code notes 18.5 s / 5.8 s / 10.0 s. The draft is
+    what a reporter waits on before seeing anything, and the regular tier
+    costs about $0.0002 more per report, so it moved (the owner's call);
+    search terms, code notes, duplicate comments and the repository map
+    stay on flex. Chat prompts now carry a `ChatTier`; a `Regular` prompt goes
+    straight to `RegularProviders`, which is also where every flex call is
+    retried — the setting formerly named `ChatRetryProviders`, renamed before
+    first deployment. Decision 77's flex-first default and deadline are
+    otherwise unchanged.
+
+98. **Code context is built in the background while the reporter reads the
+    preview.** Measured with the draft on the regular tier: the preview comes
+    ~5 s after submitting, and building the code context takes ~20–25 s on
+    flex — search terms ~3.6 s, retrieval and Jev ~1 s, reading the files and
+    writing the notes ~18.5 s. Built at "Create issue" (as before) that was the
+    wait after the click; built before the preview, the wait after
+    submitting. The owner's answer: the preview is for the reporter's own
+    text and needs no code references, so show it at once and spend the
+    reading time on the code context. `CodeContextPrefetcher` (a singleton,
+    each build in its own DI scope since the interaction's scope is gone)
+    starts the build when the draft is saved and stores the result on the
+    pending report ("" meaning "built, nothing to add"); the click takes the
+    stored block, awaits a build still running, or — after a restart lost the
+    task — builds it then. Everything stays on flex (only the draft is on the
+    regular tier, decision 97). The price is that every draft now pays for
+    its code context, duplicates and cancellations included — about $0.002
+    each — which the budget absorbs. Schema v7 adds the two columns as an
+    additive upgrade.
+
+99. **GPT-6 Luna runs at reasoning effort `medium`, set by
+    `OpenRouter__ReasoningEffort`.** Before choosing, drafts for eight real
+    user-worded reports and code notes for four of them were generated at
+    `none`, `low` and `medium` (same model, prompts and file picks) and read
+    side by side in the session — no model graded them, at the owner's
+    request — with five code-note claims checked against mtg-grimoire's
+    source (all true). No level invented anything and every title was
+    specific. `none` was fastest (drafts ~2.2 s on the regular tier) but
+    skipped the Steps/Actual sections in all three bug reports, kept the
+    reporter's first person, and failed one of four code-notes calls. `low`
+    (~3.3 s) and `medium` (~4.0 s) were equally good; `medium` fills in
+    implied reproduction steps a little more often and notes took ~17.6 s
+    against ~12 s. The owner chose `medium`: the draft's extra ~0.7 s is
+    small, and the code notes now run in the background (decision 98). The
+    setting was already configurable; it now defaults to `medium`, appears in
+    `.env.example`, and an unknown value fails startup, since OpenRouter
+    would answer it with a 400 on every call.
+
+100. **`/issues` is renamed `/list-issues`.** The owner's call: next to
+     `/issue`, a command one letter longer that does something else entirely
+     was easy to pick by mistake from Discord's command list. Nothing else
+     changed — same `app` option, same list. The bot registers its commands
+     globally with `deleteMissing`, so the first start of this version
+     removes `/issues` for servers and user installs alike; Discord clients
+     may show the old name until they refresh their command cache.
+
+101. **Outside a configured server, a user sees only the apps of the
+     configured servers they are a member of.** Supersedes decision 86
+     (every app everywhere): the owner changed their mind — installing the
+     bot should not open every repository to anyone who finds it. A server
+     listed in `GuildIds` still sees exactly its own apps. Elsewhere,
+     `AppAccess` asks Discord about each configured server in parallel
+     through `GET /guilds/{id}/members/{user}` (Discord.Net's
+     `Rest.GetGuildUserAsync`) — every time, no cache: the bot runs with the
+     `Guilds` intent only, so its gateway member cache fills with whoever
+     used a command and never hears about leaves or bans, which would let a
+     banned user keep reporting from DMs until a restart. The endpoint needs
+     no privileged intent (checked live against both configured servers:
+     the bot is found, an unknown id is not). `/issue` cannot defer before
+     showing a modal, so all lookups share a two-second deadline; a server
+     that errors or times out drops only its own apps, and when that leaves
+     nothing the reply asks the user to retry instead of claiming they are
+     in no server. The modal submit runs the same check again. The rate
+     limit (decision 87) stays: it guards spend, not access.

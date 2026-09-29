@@ -7,11 +7,74 @@ public sealed class DiscordOptions
     public string Token { get; set; } = "";
 }
 
-public sealed class OpenAIOptions
+/// <summary>
+/// Every model call the bot makes goes through OpenRouter: chat completions for text it has to write, the
+/// Decisions API for judgments it has to make. Both models are pinned here, never aliased — a decision
+/// threshold belongs to the build it was set on.
+/// </summary>
+public sealed class OpenRouterOptions
 {
+    /// <summary>Tried first: OpenAI's half-price flex tier, then OpenAI's regular endpoint.</summary>
+    public static readonly IReadOnlyList<string> DefaultChatProviders = ["openai/flex", "openai"];
+
+    /// <summary>
+    /// The regular tier: where a call that must be fast goes (<see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>), and where
+    /// a flex call is retried after missing its deadline or failing transiently.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultRegularProviders = ["openai"];
+
     public string ApiKey { get; set; } = "";
-    public string ChatModel { get; set; } = "gpt-5.6-luna";
-    public string EmbeddingModel { get; set; } = "text-embedding-3-small";
+
+    /// <summary>Model that writes drafts, file summaries and code notes.</summary>
+    public string ChatModel { get; set; } = "openai/gpt-6-luna";
+
+    /// <summary>
+    /// OpenRouter <c>provider.order</c> for the first attempt of a flex-tier chat call (every call except the
+    /// ones marked <see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>). Nullable rather than initialised because the
+    /// configuration binder appends to an existing list instead of replacing it — a configured list would
+    /// otherwise land after the defaults. See <see cref="EffectiveChatProviders"/>.
+    /// </summary>
+    public List<string>? ChatProviders { get; set; }
+
+    /// <summary>
+    /// <c>provider.order</c> for regular-tier calls and for every retry; nullable for the same reason as
+    /// <see cref="ChatProviders"/>.
+    /// </summary>
+    public List<string>? RegularProviders { get; set; }
+
+    /// <summary>
+    /// How long an interactive chat call (a reporter is waiting) may spend on the first attempt before it is
+    /// retried on <see cref="EffectiveRegularProviders"/>. Flex can queue; this caps what that costs.
+    /// </summary>
+    public int ChatDeadlineSeconds { get; set; } = 30;
+
+    /// <summary>The <c>reasoning.effort</c> values OpenRouter accepts.</summary>
+    public static readonly IReadOnlyList<string> ReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    /// <summary>
+    /// OpenRouter <c>reasoning.effort</c> for every chat call (env var <c>OpenRouter__ReasoningEffort</c>); one of
+    /// <see cref="ReasoningEfforts"/>, or empty to leave the model's own default.
+    /// </summary>
+    public string ReasoningEffort { get; set; } = "medium";
+
+    /// <summary>Decision (System One) model for every judgment: type, title, labels, dedup, file selection.</summary>
+    public string DecisionModel { get; set; } = "typesafe/jev-1.13";
+
+    /// <summary>
+    /// Embeds the repository map's summaries, and each issue, for finding an issue's files by meaning. Every
+    /// stored vector is stamped with this id; changing it re-embeds the map at the next check.
+    /// </summary>
+    public string EmbeddingModel { get; set; } = "voyageai/voyage-4";
+
+    public IReadOnlyList<string> EffectiveChatProviders => ChatProviders ?? DefaultChatProviders;
+
+    public IReadOnlyList<string> EffectiveRegularProviders => RegularProviders ?? DefaultRegularProviders;
+}
+
+public sealed class LimitsOptions
+{
+    /// <summary>Reports one Discord user may submit per rolling 24 hours; 0 turns the cap off.</summary>
+    public int ReportsPerUserPerDay { get; set; } = 10;
 }
 
 public sealed class DatabaseOptions
@@ -47,6 +110,13 @@ public sealed class AppConfig
 
     public List<ulong> GuildIds { get; set; } = new();
     public List<ulong> ChannelIds { get; set; } = new();
+
+    /// <summary>
+    /// Repository labels never attached automatically. Null means the defaults (triage outcomes such as
+    /// "duplicate" and "wontfix"); an explicit list replaces them. Nullable because the configuration
+    /// binder appends to an initialised list rather than replacing it.
+    /// </summary>
+    public List<string>? IgnoredLabels { get; set; }
 }
 
 /// <summary>
@@ -81,8 +151,9 @@ public sealed class GitHubAppAuth
 public sealed class BotOptions
 {
     public DiscordOptions Discord { get; set; } = new();
-    public OpenAIOptions OpenAI { get; set; } = new();
+    public OpenRouterOptions OpenRouter { get; set; } = new();
     public DatabaseOptions Database { get; set; } = new();
+    public LimitsOptions Limits { get; set; } = new();
     public List<AppConfig> Apps { get; set; } = new();
 
     /// <summary>
@@ -94,10 +165,9 @@ public sealed class BotOptions
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(Discord.Token)) errors.Add("Discord:Token is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.ApiKey)) errors.Add("OpenAI:ApiKey is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.ChatModel)) errors.Add("OpenAI:ChatModel is required.");
-        if (string.IsNullOrWhiteSpace(OpenAI.EmbeddingModel)) errors.Add("OpenAI:EmbeddingModel is required.");
+        errors.AddRange(ValidateOpenRouter(OpenRouter));
         if (string.IsNullOrWhiteSpace(Database.Path)) errors.Add("Database:Path is required.");
+        if (Limits.ReportsPerUserPerDay < 0) errors.Add("Limits:ReportsPerUserPerDay must be 0 (off) or positive.");
         if (Apps.Count == 0) errors.Add("Apps: at least one app must be configured.");
 
         for (var i = 0; i < Apps.Count; i++)
@@ -121,6 +191,24 @@ public sealed class BotOptions
         errors.AddRange(dupes.Select(g => $"Apps: duplicate Repo '{g.Key}'."));
 
         return errors;
+    }
+
+    private static IEnumerable<string> ValidateOpenRouter(OpenRouterOptions o)
+    {
+        if (string.IsNullOrWhiteSpace(o.ApiKey)) yield return "OpenRouter:ApiKey is required.";
+        if (string.IsNullOrWhiteSpace(o.ChatModel)) yield return "OpenRouter:ChatModel is required.";
+        if (string.IsNullOrWhiteSpace(o.DecisionModel)) yield return "OpenRouter:DecisionModel is required.";
+        // A "~vendor/model-latest" alias moves to a new build without notice, and every decision threshold
+        // in this bot was set against the probabilities of one particular build.
+        else if (o.DecisionModel.TrimStart().StartsWith('~'))
+            yield return $"OpenRouter:DecisionModel: '{o.DecisionModel}' is an alias; pin a model id such as typesafe/jev-1.13.";
+        if (string.IsNullOrWhiteSpace(o.EmbeddingModel)) yield return "OpenRouter:EmbeddingModel is required.";
+        // Checked here rather than left to the first report: OpenRouter rejects an unknown effort with a 400,
+        // which would fail every draft until someone read the logs.
+        if (!string.IsNullOrWhiteSpace(o.ReasoningEffort) && !OpenRouterOptions.ReasoningEfforts.Contains(o.ReasoningEffort.Trim()))
+            yield return $"OpenRouter:ReasoningEffort: '{o.ReasoningEffort}' must be one of " +
+                         $"{string.Join(", ", OpenRouterOptions.ReasoningEfforts)} (or empty for the model's default).";
+        if (o.ChatDeadlineSeconds <= 0) yield return "OpenRouter:ChatDeadlineSeconds must be positive.";
     }
 
     /// <summary>
@@ -191,9 +279,13 @@ public sealed class BotOptions
         }
     }
 
-    /// <summary>Apps configured for the given Discord guild.</summary>
-    public IReadOnlyList<AppConfig> AppsForGuild(ulong guildId) =>
-        Apps.Where(a => a.GuildIds.Contains(guildId)).ToList();
+    /// <summary>
+    /// The apps configured for a server: those listing it in <see cref="AppConfig.GuildIds"/>. Empty for a
+    /// DM (no server) or a server nobody configured — what a user may use there depends on which configured
+    /// servers they are in, which <c>AppAccess</c> works out.
+    /// </summary>
+    public IReadOnlyList<AppConfig> AppsForGuild(ulong? guildId) =>
+        guildId is { } id ? Apps.Where(a => a.GuildIds.Contains(id)).ToList() : [];
 
     /// <summary>The app owning the given "owner/repo", or null when none matches.</summary>
     public AppConfig? AppByRepo(string repo) =>

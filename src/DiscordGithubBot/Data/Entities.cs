@@ -7,8 +7,11 @@ public enum ReportType
     Feature,
 }
 
-/// <summary>A GitHub issue plus its cached embedding, used for duplicate detection.</summary>
-public class IssueEmbedding
+/// <summary>
+/// An open GitHub issue as duplicate detection reads it. Only open issues are kept: dedup compares new
+/// reports against open issues alone, and the sync deletes a row as soon as its issue closes.
+/// </summary>
+public class CachedIssue
 {
     public int Id { get; set; }
 
@@ -17,30 +20,15 @@ public class IssueEmbedding
 
     public int IssueNumber { get; set; }
     public required string Title { get; set; }
-
-    /// <summary>"open" or "closed".</summary>
-    public required string State { get; set; }
-
-    public DateTime? ClosedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
 
-    /// <summary>SHA256 hex of title + "\n" + body; lets sync skip unchanged issues.</summary>
-    public required string ContentHash { get; set; }
-
-    /// <summary>First 1000 characters of the issue body.</summary>
+    /// <summary>
+    /// The start of the issue body — the reporter's half only, for issues this bot filed (see
+    /// <c>IssueSyncService.SemanticBody</c>). What the duplicate finder reads.
+    /// </summary>
     public string BodyExcerpt { get; set; } = "";
 
     public string HtmlUrl { get; set; } = "";
-
-    /// <summary>Embedding vector; persisted as a BLOB via <see cref="VectorConversion"/>.</summary>
-    public float[] Vector { get; set; } = [];
-
-    /// <summary>
-    /// The OpenAI model id that produced <see cref="Vector"/>. Vectors from different models share no
-    /// coordinate space, so a row whose model no longer matches the configured one is not a comparable
-    /// candidate; sync re-embeds it instead.
-    /// </summary>
-    public string EmbeddingModel { get; set; } = "";
 }
 
 /// <summary>A drafted issue awaiting the reporter's confirmation.</summary>
@@ -64,10 +52,22 @@ public class PendingReport
     public required string DraftTitle { get; set; }
     public required string DraftBody { get; set; }
 
+    /// <summary>Serialized repository label names chosen for the issue, attached when it is created.</summary>
+    public string LabelsJson { get; set; } = "[]";
+
     /// <summary>Serialized duplicate candidates shown to the reporter.</summary>
     public string CandidatesJson { get; set; } = "[]";
 
     public DateTime CreatedAtUtc { get; set; }
+
+    /// <summary>
+    /// The code-context block for the issue body, built in the background after the preview was shown; ""
+    /// when it was built and found nothing worth adding. Never shown in Discord.
+    /// </summary>
+    public string? CodeContext { get; set; }
+
+    /// <summary>When <see cref="CodeContext"/> was built; null while the build is running or never ran.</summary>
+    public DateTime? CodeContextReadyAtUtc { get; set; }
 
     /// <summary>
     /// When a confirmation click took ownership of this report, or null while it is still up for grabs.
@@ -89,9 +89,64 @@ public class PendingAttachment
     public required byte[] Bytes { get; set; }
 }
 
+/// <summary>
+/// One source file in a repository's map: where it is, which version was read, and a one-line account of
+/// what it is responsible for. The map is what the decision model reads to find the files a report is
+/// about, so no report ever has to read the code base itself.
+/// </summary>
+public class RepoFile
+{
+    public int Id { get; set; }
+
+    /// <summary>Repository in "owner/repo" form, lowercase.</summary>
+    public required string RepoKey { get; set; }
+
+    public required string Path { get; set; }
+
+    /// <summary>The blob the summary describes; a changed file has a new blob and is summarized again.</summary>
+    public required string BlobSha { get; set; }
+
+    /// <summary>
+    /// A commit at which the file had <see cref="BlobSha"/> — the one it was read at. Code links pin to it, so a
+    /// link always shows the version the summary and the notes describe, even while the map catches up.
+    /// </summary>
+    public string CommitSha { get; set; } = "";
+
+    /// <summary>What the file does, in at most ~25 words; "" for a file that could not be read as text.</summary>
+    public string Summary { get; set; } = "";
+
+    /// <summary>
+    /// Embedding of <see cref="Path"/> and <see cref="Summary"/> as little-endian float32s (see
+    /// <c>VectorBytes</c>); empty until embedded, and cleared whenever the summary changes.
+    /// </summary>
+    public byte[] Embedding { get; set; } = [];
+
+    /// <summary>The model that produced <see cref="Embedding"/>; vectors of different models are not comparable.</summary>
+    public string EmbeddingModel { get; set; } = "";
+}
+
+/// <summary>How far a repository's map has caught up with its default branch.</summary>
+public class RepoMapState
+{
+    public required string RepoKey { get; set; }
+
+    /// <summary>The default-branch commit the latest refresh worked towards.</summary>
+    public required string CommitSha { get; set; }
+
+    /// <summary>Whether every source file at <see cref="CommitSha"/> is summarized.</summary>
+    public bool IsComplete { get; set; }
+
+    public DateTime UpdatedAtUtc { get; set; }
+}
+
 /// <summary>When a repository's issues were last synced.</summary>
 public class RepoSyncState
 {
     public required string RepoKey { get; set; }
+
+    /// <summary>Watermark for the next incremental pass (GitHub's <c>since</c>).</summary>
     public DateTime LastSyncUtc { get; set; }
+
+    /// <summary>When every open issue was last listed and the cache replaced with exactly those.</summary>
+    public DateTime LastFullSyncUtc { get; set; }
 }

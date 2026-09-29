@@ -32,5 +32,5 @@ public class CustomIdsTests
 
     [Fact]
     public void Stays_within_discord_100_char_limit() =>
-        Assert.InRange(CustomIds.Build(CustomIds.StillOpen, Guid.NewGuid(), int.MaxValue).Length, 1, 100);
+        Assert.InRange(CustomIds.Build(CustomIds.Comment, Guid.NewGuid(), int.MaxValue).Length, 1, 100);
 }

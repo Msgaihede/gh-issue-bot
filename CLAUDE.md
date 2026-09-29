@@ -1,8 +1,10 @@
 # CLAUDE.md
 
 .NET 10 Discord bot that turns Discord reports into deduplicated GitHub issues.
-Read APP.md for what the app does and
-docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the design.
+Read APP.md for what the app does,
+docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the
+original design and docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md
+for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
 
 ## Working rules
 - Commit after each feature; write good conventional-commit messages.
@@ -17,7 +19,10 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
 ## Commands
 - Build: `dotnet build`
 - Test: `dotnet test`
-- Run: `dotnet run --project src/DiscordGithubBot`
+- Run: `./run.ps1` (loads the gitignored `.env`, which the app itself never
+  reads) or `dotnet run --project src/DiscordGithubBot` with settings in the environment
+- Dry run (one report through every model call, nothing stored or posted):
+  `dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "report text"`
 - Image-upload smoke test: `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`
   (`owner/repo` must be a configured app; prints the app's auth mode, then
   `SMOKE OK: <url>` or `SMOKE FAILED: …`)
@@ -26,11 +31,28 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
   image to ghcr.io (APP.md → "CI/CD", decisions 69-70).
 
 ## Gotchas
-- Chat model must be `gpt-5.6-luna` — bare `gpt-5.6` routes to a 10x-cost tier.
-- Embedding dimension (1536) is defined once in VectorRanker.EmbeddingDimensions.
-- Cached vectors are stamped with `IssueEmbedding.EmbeddingModel`; rows from
-  another model are never ranked — sync re-embeds them (from the stored title +
-  body excerpt) so a model switch heals without a full resync.
+- Every model call goes through OpenRouter (`OpenRouterChatClient`,
+  `DecisionClient`) — never add another AI SDK or endpoint.
+- The decision model must be a pinned id (`typesafe/jev-1.13`), never a
+  `~...-latest` alias — startup rejects aliases; thresholds belong to a build.
+- Flex is only reachable by naming `openai/flex` in `provider.order`
+  (a bare `openai` never matches it). Interactive chat calls have a deadline
+  (`ChatDeadlineSeconds`) and one retry on `RegularProviders`. A prompt marked
+  `ChatTier.Regular` (today: only the draft) skips flex entirely.
+- Structured-output schemas are generated from the answer DTO
+  (`StructuredOutput`); strict mode needs every property required and no
+  nullable members — keep DTO fields non-nullable.
+- Decision thresholds (dedup 0.5/0.2, shortlist floor 0.05) are unprobed
+  pre-probe defaults; tune them from `--dry-run` output, not by guessing.
+- The DB schema is stamped with `PRAGMA user_version`: bump
+  `DatabaseSchema.Version` on ANY entity/column/index change, or existing
+  databases keep the old schema and the first query fails. For an additive
+  change also add the step to `DatabaseSchema.Upgrades` — otherwise the bump
+  rebuilds the file and throws away the (paid-for) repository map.
+- Repository-map vectors are stamped with `OpenRouter:EmbeddingModel`; only
+  vectors from the configured model are searched, and each check re-embeds
+  the rest. Code context never shows Jev the whole map — it ranks a
+  shortlist from keyword + embedding search (decision 95).
 - Discord attachment URLs expire ~24h — bytes are downloaded during the modal
   handler and persisted in SQLite (PendingAttachment).
 - Never hotlink Discord CDN URLs in GitHub issue bodies.
@@ -38,7 +60,19 @@ docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md for the des
   GIF/WebP only) and the payload carries the *sniffed* content type, never
   Discord's declared one — declared types come from the uploading client and are
   spoofable. SVG is deliberately excluded (scriptable XML, no magic number).
-- float[] embeddings map to BLOB via a ValueConverter + ValueComparer (both required).
+- Everything after `IssueBodyComposer.MetaMarker` in an issue body is bot
+  boilerplate (footer, screenshots, code context) and is cut before dedup
+  reads it.
+- Code context is written to GitHub only — never render it in Discord (any
+  user can install the bot; private code must not leak). It is built in the
+  background by `CodeContextPrefetcher` after the preview is shown and stored
+  on the pending report; the click only picks it up.
+- Commands are global and user-installable: never rely on `Context.Guild`;
+  ask `AppAccess.ForAsync(Context.Interaction.GuildId, Context.User.Id)`. A
+  configured server gets its own apps; anywhere else the user gets the apps
+  of the configured servers they are in, checked over REST
+  (`IGuildMembership`) — the bot has only the `Guilds` intent, so its member
+  cache is never trusted for this.
 - All interaction replies are ephemeral; only issue creations post publicly.
 - The report modal's "App" dropdown is not declared on ReportModal — its
   options are per-guild, so OpenModalAsync injects it via `modifyModal`, and

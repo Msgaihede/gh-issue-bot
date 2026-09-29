@@ -12,7 +12,7 @@ public class HostSetupTests
 {
     private static BotOptions Options() => new()
     {
-        Discord = new() { Token = "t" }, OpenAI = new() { ApiKey = "k" },
+        Discord = new() { Token = "t" }, OpenRouter = new() { ApiKey = "k" },
         Database = new() { Path = Path.Combine(Path.GetTempPath(), $"di-test-{Guid.NewGuid():N}.db") },
         Apps = [new AppConfig { Name = "A", Repo = "o/r", GitHubToken = "p", GuildIds = [1UL], ChannelIds = [2UL] }],
     };
@@ -39,6 +39,8 @@ public class HostSetupTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IReportPipeline>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IIssueSyncService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IPendingReportStore>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<DiscordGithubBot.CodeContext.IRepoMapService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<DiscordGithubBot.CodeContext.ICodeContextBuilder>());
     }
 
     /// <summary>

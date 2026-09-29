@@ -19,6 +19,9 @@ public interface IPendingReportStore
     /// <summary>Gives a claim back, so a failed attempt can be retried from the same buttons.</summary>
     Task ReleaseClaimAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>Records the report's code context ("" for none); a report already gone is left alone.</summary>
+    Task SetCodeContextAsync(Guid id, string codeContext, CancellationToken ct = default);
+
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>Deletes all reports older than 1 hour. Called by the maintenance service.</summary>
@@ -86,6 +89,20 @@ public sealed class PendingReportStore(BotDbContext db) : IPendingReportStore
         await db.PendingReports
             .Where(r => r.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.ClaimedAtUtc, (DateTime?)null), ct);
+    }
+
+    /// <summary>
+    /// One UPDATE of just the two code-context columns, so it can never overwrite a claim that lands while the
+    /// background build is finishing.
+    /// </summary>
+    public async Task SetCodeContextAsync(Guid id, string codeContext, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        await db.PendingReports
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.CodeContext, codeContext)
+                .SetProperty(r => r.CodeContextReadyAtUtc, now), ct);
     }
 
     /// <summary>

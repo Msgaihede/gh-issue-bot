@@ -8,11 +8,10 @@ public class IssueBodyComposerTests
     [Fact]
     public void Minimal_body_is_the_draft_plus_the_attribution_footer()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("The body.", "markus", "Acme HQ", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody("The body.", "markus", "Acme HQ", [], []);
         Assert.StartsWith("The body.", body);
         Assert.Contains("_Created by **markus** in Discord server **Acme HQ**._", body);
         Assert.DoesNotContain("Screenshots", body);
-        Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("upload failed", body);
     }
 
@@ -21,16 +20,14 @@ public class IssueBodyComposerTests
     {
         var body = IssueBodyComposer.ComposeIssueBody(
             "The body.", "markus", "Acme HQ",
-            [new UploadedImage("a.png", "https://x/a")], ["b.png"], 42);
+            [new UploadedImage("a.png", "https://x/a")], ["b.png"]);
 
         var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
         Assert.True(marker > 0);
         Assert.Contains("The body.", body[..marker]);
 
-        // Every appended block is behind the marker — the regression line included, since it is as
-        // generated as the footer is.
-        foreach (var boilerplate in new[]
-                 { "Possible regression of #42.", "### Screenshots", "> [!NOTE]", "_Created by" })
+        // Every appended block is behind the marker.
+        foreach (var boilerplate in new[] { "### Screenshots", "> [!NOTE]", "_Created by" })
             Assert.Contains(boilerplate, body[marker..]);
     }
 
@@ -40,7 +37,7 @@ public class IssueBodyComposerTests
         // The footer is unconditional, so there is no such thing as a composed body without
         // boilerplate: the marker is emitted unconditionally rather than behind a branch that is
         // always taken. An empty draft puts it at position zero, meaning "no reporter text here".
-        var body = IssueBodyComposer.ComposeIssueBody("   ", "markus", "Acme HQ", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody("   ", "markus", "Acme HQ", [], []);
 
         Assert.StartsWith(IssueBodyComposer.MetaMarker, body);
     }
@@ -53,7 +50,7 @@ public class IssueBodyComposerTests
         // of the report from the embedding, the content hash and the judge's excerpt.
         var draft = $"Before.\n\n{IssueBodyComposer.MetaMarker}\n\nAfter.";
 
-        var body = IssueBodyComposer.ComposeIssueBody(draft, "markus", "Acme HQ", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody(draft, "markus", "Acme HQ", [], []);
 
         Assert.Equal(1, CountMarkers(body));
         var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
@@ -114,7 +111,7 @@ public class IssueBodyComposerTests
     [InlineData("   ")]
     public void A_server_the_bot_cannot_name_leaves_the_reporter_credited_alone(string guildName)
     {
-        var issue = IssueBodyComposer.ComposeIssueBody("B", "markus", guildName, [], [], null);
+        var issue = IssueBodyComposer.ComposeIssueBody("B", "markus", guildName, [], []);
         var comment = IssueBodyComposer.ComposeCommentBody("B", "markus", guildName, [], []);
 
         Assert.Contains("_Created by **markus** via Discord._", issue);
@@ -127,23 +124,31 @@ public class IssueBodyComposerTests
     public void Images_render_as_markdown_gallery()
     {
         var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g",
-            [new UploadedImage("a.png", "https://x/a"), new UploadedImage("b.png", "https://x/b")], [], null);
+            [new UploadedImage("a.png", "https://x/a"), new UploadedImage("b.png", "https://x/b")], []);
         Assert.Contains("### Screenshots", body);
         Assert.Contains("![a.png](https://x/a)", body);
         Assert.Contains("![b.png](https://x/b)", body);
     }
 
+    /// <summary>
+    /// The code block is the bot's reading of the repository, so it sits behind the marker: two reports about
+    /// different bugs in the same file must not look alike to the duplicate finder because of it.
+    /// </summary>
     [Fact]
-    public void Regression_reference_is_included()
+    public void Code_context_goes_behind_the_marker_and_before_the_footer()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], [], 42);
-        Assert.Contains("Possible regression of #42.", body);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], [], "### Relevant code\n- `src/a.cs`");
+
+        var marker = body.IndexOf(IssueBodyComposer.MetaMarker, StringComparison.Ordinal);
+        var code = body.IndexOf("### Relevant code", StringComparison.Ordinal);
+        Assert.True(code > marker);
+        Assert.True(code < body.IndexOf("_Created by", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Failed_uploads_are_noted()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["x.png", "y.png"], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["x.png", "y.png"]);
         Assert.Contains("x.png, y.png", body);
         Assert.Contains("upload failed", body, StringComparison.OrdinalIgnoreCase);
     }
@@ -152,7 +157,7 @@ public class IssueBodyComposerTests
     public void Image_names_cannot_break_out_of_their_markdown_link()
     {
         var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g",
-            [new UploadedImage("shot](http://evil)![x\n<b>`.png", "https://x/a")], [], null);
+            [new UploadedImage("shot](http://evil)![x\n<b>`.png", "https://x/a")], []);
 
         Assert.Contains(
             @"![shot\]\(http://evil\)!\[x \<b>\`.png](https://x/a)", body);
@@ -162,7 +167,7 @@ public class IssueBodyComposerTests
     [Fact]
     public void Failed_upload_names_cannot_break_out_of_their_note()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["a](x).png", "b`.png"], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "u", "g", [], ["a](x).png", "b`.png"]);
 
         Assert.Contains(@"a\]\(x\).png, b\`.png", body);
     }
@@ -170,7 +175,7 @@ public class IssueBodyComposerTests
     [Fact]
     public void The_reporter_name_cannot_break_out_of_the_footer()
     {
-        var body = IssueBodyComposer.ComposeIssueBody("B", "ev[il](http://evil)\nx", "Acme HQ", [], [], null);
+        var body = IssueBodyComposer.ComposeIssueBody("B", "ev[il](http://evil)\nx", "Acme HQ", [], []);
 
         Assert.Contains(
             @"_Created by **ev\[il\]\(http://evil\) x** in Discord server **Acme HQ**._", body);
@@ -181,7 +186,7 @@ public class IssueBodyComposerTests
     {
         // A server name is no more trustworthy than a display name: whoever owns the guild picks it.
         var body = IssueBodyComposer.ComposeIssueBody(
-            "B", "u", "Evil](http://evil)![x\\<b>\nrest", [], [], null);
+            "B", "u", "Evil](http://evil)![x\\<b>\nrest", [], []);
 
         Assert.Contains(
             @"_Created by **u** in Discord server **Evil\]\(http://evil\)!\[x\\\<b> rest**._", body);
@@ -195,7 +200,7 @@ public class IssueBodyComposerTests
         // renders as a single literal backslash and the "<" behind it is armed again — and GitHub renders
         // <a href> as a live link.
         var body = IssueBodyComposer.ComposeIssueBody(
-            "B", """\<a href="https://evil.example">x\</a>""", "Acme HQ", [], [], null);
+            "B", """\<a href="https://evil.example">x\</a>""", "Acme HQ", [], []);
 
         Assert.Contains(
             """_Created by **\\\<a href="https://evil.example">x\\\</a>** in Discord server **Acme HQ**._""",
@@ -203,12 +208,11 @@ public class IssueBodyComposerTests
     }
 
     [Fact]
-    public void Comment_body_never_has_regression_line()
+    public void Comment_body_carries_images_and_the_also_reported_footer()
     {
         var body = IssueBodyComposer.ComposeCommentBody("B", "u", "g",
             [new UploadedImage("a.png", "https://x/a")], []);
         Assert.Contains("![a.png](https://x/a)", body);
         Assert.Contains("_Also reported by **u** in Discord server **g**._", body);
-        Assert.DoesNotContain("regression", body, StringComparison.OrdinalIgnoreCase);
     }
 }

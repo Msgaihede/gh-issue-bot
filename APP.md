@@ -3,120 +3,319 @@
 DiscordGithubBot is a .NET 10 console application that lets the users of one
 or more apps report bugs and request features directly from Discord, without
 ever needing a GitHub account. It turns a short Discord message into a
-well-written, deduplicated GitHub issue (or a comment on an existing one),
-with AI doing the normalization and duplicate detection and a human always
-confirming before anything is written to GitHub. For the full design
-rationale see `docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md`;
+well-written, deduplicated, labelled GitHub issue (or a comment on an existing
+one) that names the code and docs it is about. Every model call goes through
+[OpenRouter](https://openrouter.ai/): TypeSafe's **Jev** decision model makes
+every judgment, **GPT-6 Luna** writes every piece of text, and a human always
+confirms before anything is written to GitHub. For the design see
+`docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md` (and the
+original `docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md`);
 for why specific choices were made, see `docs/DECISIONS.md`.
 
 ## What it does
 
 A Discord server admin configures one or more "apps," each pointing at a
-GitHub repository and a set of Discord guilds/channels. Members of those
-guilds report a bug or request a feature with a slash command; the bot opens
-a modal, takes their description and optional screenshots, normalizes it
-with an LLM, checks it against existing GitHub issues, and — after the
-reporter confirms — creates a new issue or comments on a matching one. New
-issues are also announced publicly in the app's configured channel(s).
+GitHub repository, a set of Discord guilds and the channels where new issues
+are announced. Anyone who can run the bot's commands — in those guilds, or
+anywhere once they have added the bot to their own Discord account — runs
+`/issue`, describes the problem and attaches screenshots. The bot decides
+whether it is a bug or a feature request, drafts the issue, checks it against
+the repository's open issues, picks the repository's labels, and — after the
+reporter confirms — creates the issue (with the relevant code and docs
+attached) or comments on the matching one. New issues are also announced
+publicly in the app's configured channel(s).
 
 ## The report workflow
 
-1. **Modal.** The reporter runs `/report-issue` or `/request-feature` — no
-   options either way. A modal opens with a multiline description field and
-   an optional file upload for up to 10 screenshots; when the guild maps to
-   more than one app, a required "App" dropdown sits on top of the form.
+1. **Modal.** The reporter runs `/issue` — no options. A modal opens with a
+   multiline description field and an optional file upload for up to 10
+   screenshots; when more than one app is reachable from where the command
+   was run, a required "App" dropdown sits on top of the form (see "Where the
+   bot works" below). A reporter over the daily report limit is told when
+   they can report again instead of getting the modal.
 2. **Defer, then immediate download.** On submit, the bot acknowledges the
    interaction ephemerally (Discord allows three seconds) and downloads any
    attached image bytes right away — Discord's CDN URLs expire in about 24
    hours. Anything that is not an image, is larger than 10 MB, or fails to
    download is skipped and listed by name in a warning line above the
-   reply, rather than costing the reporter their report. "Not an image" is
-   decided on the downloaded bytes — their magic numbers must say PNG, JPEG,
-   GIF, or WebP — not on the type Discord declares, which is inferred from
-   the file name the uploading client chose and is therefore trivial to
-   fake. Everything from here on stays private to the reporter until an
-   issue is actually created.
-3. **Normalize.** The raw text goes to the chat model (`gpt-5.6-luna`), which
-   produces a structured `{title, body}` draft following a bug template
-   (Description / Steps to Reproduce / Expected / Actual) or a feature
-   template (Summary / Motivation / Proposed Solution), translating into
-   English if needed. It never invents facts that weren't in the report — a
-   section with nothing to say is left out. The reporter credit is not part
-   of the draft; it is added to the body at the moment the issue or comment
-   is composed (step 9).
-4. **Embed.** The normalized text is embedded with `text-embedding-3-small`
-   (1536 dimensions) for similarity search.
-5. **Cosine top-5.** The bot keeps an incrementally synced, embedded copy of
-   the target repo's issues (open, plus closed within the last 30 days) and
-   ranks them against the new report by cosine similarity, taking the top 5.
-   Issues the bot filed itself are embedded from the reporter's half of the
-   body only: a hidden marker separates it from the generated tail (footer,
-   screenshots, notes), which is cut off before hashing, embedding and
-   excerpting, so two reports never look alike merely for both having come
-   through Discord. Every cached vector is tagged with the model that produced
-   it: changing the configured embedding model makes the old vectors
-   incomparable, so they drop out of the candidate list and the next sync
-   re-embeds them rather than ranking them against the new one.
-6. **LLM verdict.** Those candidates, plus the normalized report, go back to
-   the chat model for a structured verdict: a specific duplicate, an
-   uncertain set of candidates, or no match. A parse failure degrades safely
-   to "uncertain" rather than guessing.
-7. **Outcome handling** (all ephemeral): a match on an **open** issue offers
-   "Same issue — add my report" or "Not it — show my draft"; a match on an
-   issue **closed under 30 days** asks whether it is still happening ("Still
-   happening" drafts a new issue referencing the old one, "Looks fixed" just
-   links it and ends the flow); **uncertain** shows the candidates in a
-   select menu plus a "None of these — new issue" escape hatch to the draft;
-   **no match** goes straight to the draft.
-8. **Preview and confirm.** Nothing reaches GitHub without an explicit click
-   from the reporter. Every path that creates an issue shows the drafted
-   title and body first, behind a "Create issue" button. The duplicate path
-   confirms against the matched issue instead — "Same issue — add my report"
-   posts the comment straight away, with the draft one click away behind
-   "Not it — show my draft".
-9. **Create or comment.** On create: screenshots upload to GitHub and get
-   embedded in the body under a `### Screenshots` heading, the body ends with
-   a `_Created by **<name>** in Discord server **<server>**._` footer (and a
-   `Possible regression of #N.` line when the report came out of the
-   closed-issue flow), the issue gets a `bug`/`enhancement` label, a public
-   announcement posts in the app's channel(s), and the reporter gets an
-   ephemeral confirmation. On comment: screenshots upload the same way, but
-   the comment never repeats the report. An LLM compares the draft against
-   the matched issue (its cached title and first 1000 body characters) and
-   the comment carries only what the report adds — different repro steps,
-   environment or version details, error messages, workarounds — above a
-   `_Also reported by **<name>** in Discord server **<server>**._`
-   footer. A report that adds nothing posts that footer line alone, and if
-   the comparison itself fails the full draft is posted instead: dropping
-   details silently would be worse than repeating them. Nothing posts
-   publicly on the comment path. A screenshot that cannot be uploaded is
-   named in a note in the body rather than blocking the issue.
+   reply. "Not an image" is decided on the downloaded bytes — their magic
+   numbers must say PNG, JPEG, GIF, or WebP — not on the type Discord
+   declares, which the uploading client controls. Everything from here on
+   stays private to the reporter until an issue is actually created.
+3. **Type (Jev).** A two-option decision: is this a *bug* (something that
+   should work is broken) or a *feature request* (something new or
+   different)? It picks the draft template and the type label. If the call
+   fails, the report is treated as a bug; the preview shows the type either
+   way.
+4. **Draft (GPT-6 Luna).** The raw text becomes a structured body following a
+   bug template (Description / Steps to Reproduce / Expected / Actual) or a
+   feature template (Summary / Motivation / Proposed Solution), translated
+   into English if needed, plus **three alternative titles**. The prompt holds
+   titles to what the issue actually is: the specific symptom or capability
+   and where it happens, in the reporter's concrete details, never a generic
+   "Bug report" or "Issue with the app". Nothing is invented; a section with
+   nothing to say is left out. A draft that fails twice ends the flow with an
+   apology rather than a half-written issue.
+5. **Review (Jev), in parallel with dedup.** One decision request picks the
+   title that best describes the body for someone scanning the issue list,
+   and asks, label by label, whether each of the repository's own labels
+   applies (read live from GitHub). Triage labels — `duplicate`, `invalid`,
+   `wontfix`, `won't fix`, `good first issue`, `help wanted` — are never
+   offered (per-app `IgnoredLabels` replaces that list), and the repository's
+   own type label (`bug`; `enhancement`/`feature`/`feature request`) is always
+   attached when it exists.
+6. **Duplicate check (Jev), against open issues only.** The bot keeps a cached
+   copy of the repository's open issues (incremental sync per report, full
+   resync daily). Jev first reads every open issue's title and opening — in
+   chunks of 120 when there are many — and shortlists the few that could be
+   the same problem; then it lays each shortlisted issue's full text next to
+   the draft and judges it *different*, *related but distinct*, or *the same
+   underlying problem*. Issues the bot filed itself are compared on the
+   reporter's half of the body only — everything after a hidden marker
+   (footer, screenshots, code context) is cut first, so two reports never look
+   alike merely for both having come through Discord.
+7. **Outcome** (all ephemeral):
+   - exactly one issue is probably the same → **"Same issue — add my report"**
+     or **"Not it — show my draft"**;
+   - several are, or one might be → a select menu of candidates plus
+     **"None of these — new issue"**;
+   - nothing → straight to the draft preview.
+8. **Preview and confirm.** Every path that creates an issue shows the draft
+   first — with the classified type and the chosen labels in small print
+   above the title — behind **Create issue** / **Cancel**. The duplicate path
+   confirms against the matched issue instead.
+9. **Create or comment.** The **code context** (see below) was started in the
+   background the moment the preview appeared, so it is usually ready by the
+   time the reporter clicks; if not, the click waits for the rest of it while
+   the screenshots upload to GitHub. The body then gets
+   a `### Screenshots` gallery, the "Relevant code" / "Related docs" block,
+   and a `_Created by **<name>** in Discord server **<server>**._` footer
+   (`via Discord` when the server is unknown — a DM, or a server the bot is
+   not in). The issue gets the chosen labels, a public announcement posts in
+   the app's channel(s), and the reporter gets an ephemeral confirmation. On
+   comment: screenshots upload the same way, and the comment carries only
+   what the report adds to the issue (GPT-6 Luna compares the draft with the
+   cached issue text) above an `_Also reported by …_` footer — or that footer
+   alone when it adds nothing, or the full draft if the comparison fails.
+   Nothing posts publicly on the comment path. A screenshot that cannot be
+   uploaded is named in a note rather than blocking the issue.
 
 Between the modal submit and that final click the draft (with the downloaded
-screenshot bytes) lives in SQLite for **one hour**; an hourly background pass
-sweeps expired rows, and a click on an older message answers "that report is
-no longer waiting". Clicking a button also strips the buttons off the message
-it was clicked on, and the confirming click claims the draft in the database
-before it touches GitHub, so the same report cannot be filed twice even if two
-clicks land at the same instant. A confirmation that fails — GitHub down, say —
-gives the claim back, so the draft and its buttons still work for a retry.
+screenshot bytes and the chosen labels) lives in SQLite for **one hour**; an
+hourly background pass sweeps expired rows, and a click on an older message
+answers "that report is no longer waiting". Clicking a button also strips the
+buttons off the message it was clicked on, and the confirming click claims
+the draft in the database before it touches GitHub, so the same report cannot
+be filed twice. A confirmation that fails — GitHub down, say — gives the claim
+back, so the draft and its buttons still work for a retry.
+
+## Code and docs context
+
+Created issues name the files they are most likely about, so a maintainer
+starts from the right place:
+
+- **Repository map.** A background worker keeps, per app, one line per source
+  file and Markdown doc (`.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`) on the
+  default branch: what the file is responsible for, or what the doc explains,
+  written by GPT-6 Luna on the flex tier. Dependencies, build output,
+  generated or minified code, assets, lock files, `.github/`, licences and
+  codes of conduct are left out, as is anything over 200 KB; a repository with
+  more than 2000 such files keeps the shallowest 2000. The worker checks
+  every app **at startup and then every 10 minutes**: it asks GitHub for the
+  default branch's head (two calls when nothing changed) and summarizes every
+  file added or changed since the last check — compared by git blob SHA, so an
+  edit is never missed — and drops deleted ones. A check runs until the map is
+  complete, so the startup check is the whole first build (saved every 400
+  files; a mid-sized repository takes a few minutes on flex). A request
+  OpenRouter refuses outright (credits exhausted, bad key) ends the check
+  without losing anything; the next check picks up where it stopped. Reports
+  filed within 10 minutes of a push can still see the previous version of the
+  files it changed.
+- **Embeddings.** Every summary (with its path) is also embedded with
+  `voyageai/voyage-4`, so files can be found by meaning, not only by shared
+  words. A changed summary gets a new vector; each check embeds whatever lacks
+  one — which is also how an existing map, or a switch of embedding model,
+  catches up (a 1,551-file map cost $0.0035 to embed).
+- **While the reporter reads the preview.** The code context is for
+  maintainers, so the preview does not wait for it: it starts in the
+  background as soon as the preview is shown and is saved with the draft. On
+  "Create issue" it is usually ready (measured: the preview in ~5 s, the code
+  context ~20–25 s later on flex), so creating takes a few seconds; a
+  reporter who clicks sooner waits only for the remainder, and a draft that
+  outlived a bot restart gets its code context built at the click. It is built
+  for every draft, duplicates and cancelled ones included (~$0.002 each).
+  Reporters rarely use the code's vocabulary ("nothing comes up" rather than
+  `fts_query`), so finding the files is two-sided:
+  1. GPT-6 Luna writes the search terms a developer would use, looking at the
+     repository's file tree so the terms match the names this codebase uses;
+  2. keyword search (BM25 over path + summary) and embedding search each rank
+     the files, and the two rankings are fused; code and docs are ranked
+     apart, and the top 40 code files and top 10 docs go on;
+  3. Jev picks up to four code files and two docs from those candidates;
+  4. the bot reads them at the exact version the map summarized, and GPT-6
+     Luna says which are really involved and how, naming functions or
+     documented behaviour, plus a short note on where a fix would likely go.
+
+  Measured on mtg-grimoire's history (decision 95), this finds a file the fix
+  actually changed in the top 10 for 87% of user-worded reports, and Jev
+  choosing from the 40 candidates matched Jev reading the whole map while
+  using about 3% of the tokens. Without search terms the report text is
+  searched alone; without an issue embedding the keyword ranking stands
+  alone. The result is appended to the issue under "Relevant code" and
+  "Related docs", each link pinned to the commit its file was read at (so it
+  shows exactly the version the notes describe), and a line saying it is
+  AI-generated.
+- **GitHub only.** The block is never shown in Discord: the preview is the
+  reporter's text, and anyone who can run the bot is not necessarily allowed
+  to read a private repository's code. The map covers the issue repository
+  itself (`Repo`), so the notes are exactly as visible as the code they
+  describe.
+- **Degradation.** If the notes cannot be written, the picked files are listed
+  with their map summaries, marked as unread; if selection fails, or the map
+  is not built yet, the issue is filed without the block.
 
 ## Slash commands
 
-- **`/report-issue`** — opens the bug-report modal described above.
-- **`/request-feature`** — same flow, using the feature-request
-  template and the `enhancement` label instead of `bug`.
-- **`/issues [app]`** — an ephemeral list of the target repo's open issue
+- **`/issue`** — opens the report modal described above.
+- **`/issue-install`** — an ephemeral message with an **Add to my account**
+  button: the Discord link that installs the bot on the caller's own account.
+- **`/list-issues [app]`** — an ephemeral list of the target repo's open issue
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
 
-The report commands take no options: with a single configured app the modal
-opens straight away, with several the modal itself asks which app via a
-dropdown. Only `/issues` still has an `app` option (it opens no modal to ask
-in) — needed only when the guild maps to more than one app, and naming an
-unknown one answers with the valid names. A name that is given is always
-honoured — it must match a configured app of that guild, even when the guild
-has only one.
+`/issue` takes no options: with one reachable app the modal opens straight
+away, with several the modal asks which via a dropdown. `/list-issues` keeps an
+`app` option (it opens no modal to ask in), needed only when several apps are
+reachable; an unknown name answers with the valid ones.
+
+## Where the bot works (user install)
+
+Every command is registered **globally** and can be used in servers, in DMs
+with the bot, and in group DMs — both when the bot was added to a server and
+when a user added it to their own account. Which apps a command offers
+depends on where it was run:
+
+- In a server listed in some app's `GuildIds`: exactly those apps (as
+  before).
+- Anywhere else — a DM, a group DM, or a server nobody configured: the apps
+  of the configured servers **the user is a member of**. Someone in none of
+  them is told so; installing the bot does not open every repository to
+  anyone who finds it.
+
+Membership is asked of Discord's REST API (`GET /guilds/{id}/members/{user}`,
+one call per configured server, in parallel) each time, not read from the
+gateway cache: the bot runs with the `Guilds` intent only, so its cache never
+hears that someone left or was banned. That endpoint needs no privileged
+intent, but it only works for servers the bot is in — a configured server
+the bot has left is logged as a warning and its apps are skipped. `/issue`
+must show its modal within Discord's three seconds, so the lookups get two
+seconds together; a server Discord did not answer for in time only drops its
+own apps, and if that leaves none the reply asks the user to try again rather
+than saying they are in no server. The modal submit checks again (the pick
+echoes back through the client, and the reporter may have left since).
+
+To allow user installs, open the application in the [Discord Developer
+Portal](https://discord.com/developers/applications) → **Installation** →
+tick **User Install** (scope `applications.commands`). Keep **Guild Install**
+for the servers the bot joins (scopes `bot` + `applications.commands`). The
+link `/issue-install` hands out is built from the interaction's application id,
+so there is nothing to configure in the bot. Global commands replace the
+per-server registrations of earlier versions; the bot clears those on start.
+
+Because every report costs money and anyone in a configured server can
+report from anywhere once they install the bot, each Discord user may submit **10 reports per
+rolling 24 hours** by default (`Limits:ReportsPerUserPerDay`, `0` = no cap).
+The limit is checked when `/issue` opens the modal and counted on submit; it
+lives in memory, so a restart resets it.
+
+## Models and cost
+
+| Model | Via | Used for |
+| --- | --- | --- |
+| `typesafe/jev-1.13` | OpenRouter Decisions API | type, title choice, labels, duplicate shortlist + verification, file and doc selection |
+| `openai/gpt-6-luna` | OpenRouter chat completions | the draft, repository-map summaries, search terms, code notes, duplicate comments |
+| `voyageai/voyage-4` | OpenRouter embeddings | repository-map summaries and each new issue, for finding its files by meaning |
+
+**Flex first — except the draft.** Chat calls send `provider.order =
+["openai/flex", "openai"]` (`ChatProviders`): OpenAI's half-price flex tier
+first, the regular tier behind it, and OpenRouter itself moves on when flex
+rejects a request. Flex can also queue, so a call a reporter is waiting on has
+`ChatDeadlineSeconds` (30) on the first attempt; past that, or after any
+transient failure, it is retried once on `RegularProviders` (`["openai"]`,
+the regular tier). The **draft** goes to `RegularProviders` directly: the
+reporter waits on it before seeing anything, and flex more than doubled it
+(7.2 s against 3.2 s measured), for a saving of about $0.0002 a report.
+Search terms, code notes, duplicate comments and the repository map stay on
+flex; background work waits out the queue.
+
+**Reasoning effort** is `medium` for every GPT-6 Luna call, set by
+`OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
+model's own default; anything else fails startup. Read side by side on real
+reports, `low` and `medium` wrote equally good drafts and code notes (`medium`
+fills in reproduction steps a little more often; drafts ~4.0 s against
+~3.3 s on the regular tier), while `none` skipped bug-template sections and
+failed one code-notes call in four.
+
+**Pinned models.** `DecisionModel` must be a versioned id — startup rejects a
+`~…-latest` alias, because every decision threshold belongs to one build.
+When changing models, re-check the thresholds with `--dry-run`.
+
+### Cost
+
+Prices from OpenRouter's catalog on 2026-09-29: GPT-6 Luna flex $0.05 per
+million input tokens / $0.25 per million output (regular 2×), Jev 1.13 $0.042
+per million input tokens with free output.
+
+| Per report (typical) | Cost |
+| --- | --- |
+| Jev: type | $0.00006 |
+| Luna: draft (reasoning medium) | $0.0005 |
+| Jev: title + 40 labels | $0.0002 |
+| Jev: duplicate check over 200 open issues | $0.0012 |
+| Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
+| **Total** | **≈ $0.0035** |
+
+1000 reports a month come to about **$3.50** on flex, about $5 if every chat
+call fell back to the regular tier, and code context no longer grows with the
+size of the repository. Keeping the repository map current adds cents (a
+first build of mtg-grimoire's 1,551 files was $0.19 of summaries plus $0.004
+of embeddings; after that only changed files are paid for). Measured on
+mtg-grimoire: a created issue used $0.0019 of GPT-6 Luna and 9,631 Jev input
+tokens (≈ $0.0004), where reading the whole map had cost 179k Jev tokens.
+
+The bot logs the AI usage of every drafted report, created issue and map
+refresh as `$<cost> in <n> call(s), <k> decision-model input tokens`.
+
+**BYOK.** With your own provider keys behind OpenRouter ("bring your own
+key"), OpenRouter's reported `cost` is only its own fee — usually $0 — and the
+provider bills you directly. Chat responses still say what OpenAI charged
+(`cost_details.upstream_inference_cost`), and the bot counts that. Decision
+responses report no upstream cost, so for Jev the logs show input tokens
+instead: TypeSafe bills those at $0.042 per million.
+
+**Hard caps.** Without BYOK, set a monthly credit limit on the OpenRouter key.
+With BYOK that limit only caps OpenRouter's fees — set the budget limits on
+the OpenAI and TypeSafe accounts instead. The per-user report limit only stops
+one account from spending the budget.
+
+### Tuning the decisions
+
+Every decision gate — labels at P ≥ 0.5, duplicates offered at P(same) ≥ 0.5
+and asked about at ≥ 0.2, shortlist floors at 0.05 — is a default set before
+any real data was seen. Run representative reports through
+
+```
+dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "the report text"
+```
+
+It refreshes the app's repository map, then prints the type, every drafted
+title with the chosen one marked, the labels, the duplicate verdict with its
+shortlist, the body, the code context and the AI cost — and, above that, each
+Jev decision's raw probabilities (Debug log). It stores no report and posts
+nothing to Discord or GitHub (it does update the issue cache and the map).
+Adjust the named constants in `DuplicateFinder`, `DraftReviewer`,
+`CodeContextBuilder` if a clear case lands on the wrong side of a gate.
 
 ## Configuration
 
@@ -125,8 +324,7 @@ Configuration layers in order, last one wins: `appsettings.json` →
 nesting delimiter) → command-line arguments → Docker secrets at
 `/run/secrets` (via `Microsoft.Extensions.Configuration.KeyPerFile`, added
 last and only when that directory exists, so where they exist they always
-win). Mix and match freely — e.g. commit non-secret defaults to JSON and
-supply the Discord token and API keys as env vars or Docker secrets.
+win).
 
 The JSON shape (see `src/DiscordGithubBot/appsettings.json` for the
 checked-in defaults, and `.env.example` for the env-var form of every knob):
@@ -134,36 +332,51 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 ```json
 {
   "Discord": { "Token": "<secret>" },
-  "OpenAI": {
+  "OpenRouter": {
     "ApiKey": "<secret>",
-    "ChatModel": "gpt-5.6-luna",
-    "EmbeddingModel": "text-embedding-3-small"
+    "ChatModel": "openai/gpt-6-luna",
+    "ChatProviders": ["openai/flex", "openai"],
+    "RegularProviders": ["openai"],
+    "ChatDeadlineSeconds": 30,
+    "ReasoningEffort": "medium",
+    "DecisionModel": "typesafe/jev-1.13",
+    "EmbeddingModel": "voyageai/voyage-4"
   },
   "Database": { "Path": "db/app.db" },
+  "Limits": { "ReportsPerUserPerDay": 10 },
   "Apps": [
     {
       "Name": "MyApp",
       "Repo": "owner/repo",
       "GitHubToken": "<secret>",
       "GuildIds": [111111111111111111],
-      "ChannelIds": [222222222222222222]
+      "ChannelIds": [222222222222222222],
+      "IgnoredLabels": ["duplicate", "wontfix"]
     }
   ]
 }
 ```
 
-`Database:Path` is relative to the working directory (`db/app.db` by
-default); the folder is created at startup if it does not exist.
+`ChatProviders`, `RegularProviders` and `IgnoredLabels` fall back to their
+defaults when absent; a configured list replaces the default rather than
+extending it. `Database:Path` is relative to the working directory
+(`db/app.db` by default); the folder is created at startup if it does not
+exist. The database only holds caches and hour-long drafts: its schema is
+stamped: a file from an older build is upgraded in place when the change is
+additive (new columns — the repository map survives), and rebuilt otherwise,
+rather than failing.
 
 `Apps` is a list, not a dictionary — `owner/repo` contains a `/`, which can't
 appear in an env-var name, so a list with a unique `Repo` field stays
 overridable. Startup fails fast — every problem printed as a
 `CONFIG ERROR: <key> …` line on stderr, exit code 1, before anything
-connects — if: the Discord token, OpenAI key, chat model, embedding model or
-database path is missing; there are no apps; or any app has an empty name, a
-`Repo` that isn't `owner/repo`, a repo that another app already claims (case
-insensitive), no guild ids, no channel ids, or credentials that are not
-exactly one of the two forms described next.
+connects — if: the Discord token, OpenRouter key, chat, decision or embedding
+model, or database path is missing; the decision model is a `~` alias; the chat
+deadline is not positive or the report limit is negative; there are no apps;
+or any app has an empty name, a `Repo` that isn't `owner/repo`, a repo that
+another app already claims (case insensitive), no guild ids, no channel ids,
+or credentials that are not exactly one of the two forms described next. A
+leftover `OpenAI` section from an older build prints a warning.
 
 ### GitHub credentials: PAT or GitHub App
 
@@ -199,9 +412,10 @@ Setting one up:
    better if the repositories belong to an org. Webhooks are not used: untick
    *Active*.
 2. **Permissions** — Repository permissions → **Issues: Read and write**
-   (creating issues and comments) and **Contents: Read and write** (the
-   tier-2 screenshot fallback commits to the `issue-assets` branch). Nothing
-   else is needed.
+   (creating issues and comments, reading labels) and **Contents: Read and
+   write** (reading the code and docs for the repository map, and the tier-2
+   screenshot fallback commits to the `issue-assets` branch). Nothing else is
+   needed.
 3. **Install it** — the App's *Install App* tab → install on the account that
    owns the repositories, and select the repositories you configure as apps.
 4. **Note the ids** — the **App ID** is on the App's *General* tab. The
@@ -237,17 +451,24 @@ see the smoke test below.
 
 ## Running locally
 
-`dotnet run --project src/DiscordGithubBot` runs it directly. Copy
-`.env.example` to `.env`, fill in real values, and export them into your
-shell (or use a tool that loads `.env` files) before running — the app
-itself does not read `.env` files; only compose does. `appsettings.json`
+Copy `.env.example` to `.env`, fill in real values, and start the bot with
+`./run.ps1` (PowerShell) — it takes the same arguments as the app, so
+`./run.ps1 --dry-run owner/repo "text"` works too. The app itself does not read
+`.env` files (only compose does); `run.ps1` loads `.env` into its own process
+environment, skipping empty values so an unfilled line never overrides a
+setting made elsewhere, picks up bot settings saved as Windows user variables
+after the terminal was opened, and points the content root at the project so
+`appsettings.json` is actually loaded. `dotnet run --project src/DiscordGithubBot`
+still works when the settings are already in the environment. `appsettings.json`
 ships with safe, secret-free defaults, so local runs just need the Discord
-token, OpenAI key, and per-app GitHub credentials from elsewhere. For an app
-on GitHub App credentials that means `Apps__0__GitHubApp__PrivateKeyPath`
+token, the OpenRouter key, and per-app GitHub credentials from elsewhere. For
+an app on GitHub App credentials that means `Apps__0__GitHubApp__PrivateKeyPath`
 pointing at the `.pem` on disk — an exported environment variable cannot
 carry the PEM's newlines, and startup rejects the mangled key.
 
 `dotnet build` builds everything, `dotnet test` runs the suite.
+`--dry-run owner/repo "text"` (see "Tuning the decisions") runs one report
+through every model call without Discord.
 
 To check that image uploads work against a real repository without going
 through Discord:
@@ -300,7 +521,7 @@ Secrets reach the container two ways, and you can mix them:
 - **Docker secrets** — files under `secrets/` (gitignored), mounted at
   `/run/secrets` and read key-per-file, so they win over everything else.
   The file *name* is the config key with `__` for nesting:
-  `secrets/Discord__Token`, `secrets/OpenAI__ApiKey`, and, if you want the
+  `secrets/Discord__Token`, `secrets/OpenRouter__ApiKey`, and, if you want the
   per-app GitHub PATs out of `.env` too, `secrets/Apps__0__GitHubToken`
   (one file per app index) — add each new file to both the service's
   `secrets:` list and the top-level `secrets:` block.
@@ -334,62 +555,52 @@ Two GitHub Actions workflows live in `.github/workflows/`:
 
 ## Manual verification
 
-The suite covers the logic; these seven steps cover the parts only a live bot
-can prove. Run the bot with a real Discord token, a real OpenAI key and real
-GitHub credentials for a test repository, in a guild where that repository is
-the guild's **only** configured app. Steps 1–6 are written for a PAT; step 7
-repeats what is worth repeating under a GitHub App.
+The suite covers the logic; these steps cover the parts only a live bot can
+prove. Run the bot with a real Discord token, a real OpenRouter key and real
+GitHub credentials for a test repository that has a few open issues, a few
+labels (say `bug`, `enhancement`, `ui`, `android`) and some source files and
+Markdown docs, in a guild where that repository is the guild's **only**
+configured app. Enable **User Install** in the Developer Portal first.
 
-1. **Modal.** Run `/report-issue` in the guild. The modal opens immediately —
-   with one configured app there is no "App" dropdown, no extra step. Fill in
-   the description, attach two screenshots, submit. (If a second app is
-   configured for a test guild, also check the other shape once: the modal
-   opens with a required "App" dropdown on top, and the submitted report
-   lands in the picked app's repository.)
-2. **New issue path.** The reply is the AI draft preview with **Create
-   issue** / **Cancel**. Press *Create issue* and check that: the issue
-   exists on GitHub with both screenshots rendering inline in the body, a
-   `bug` label, and a `_Created by **<you>** in Discord server
-   **<this server>**._` footer; a public announcement naming the app, the
-   issue and the reporter appears in the app's configured channel(s),
-   showing both screenshots as a media gallery under the text (on a
-   **private** repository the images are behind authentication, so expect
-   the gallery to come up blank there); and everything you saw in the
-   command channel was ephemeral ("Only you can see this") — the invoker's
-   messages never post publicly.
-3. **Duplicate path.** Report the same bug again with different wording. The
+1. **Dry run.** `dotnet run --project src/DiscordGithubBot -- --dry-run owner/repo "…"`
+   with a clear bug, a clear feature request, a near-copy of an open issue and
+   an off-topic message. Check the type, the chosen title (specific, not
+   generic), the labels, the duplicate verdict and the code context, and read
+   the raw probabilities in the Debug lines. The first run builds the
+   repository map — expect its summary line and a few cents of cost.
+2. **Modal.** Run `/issue` in the guild. The modal opens immediately, with no
+   "App" dropdown. Describe a bug, attach two screenshots, submit.
+3. **New issue path.** The reply is the draft preview: "Bug report · Labels:
+   …" in small print, a specific title, the body, **Create issue** /
+   **Cancel**. Press *Create issue* and check that the issue exists on GitHub
+   with both screenshots inline, the previewed labels, a "Relevant code" (and,
+   if a doc fits, "Related docs") block linking to real files at a commit,
+   and the `_Created by …_` footer; that a public announcement appears in the
+   app's channel(s); and that everything in the command channel was
+   ephemeral. The log line for the creation states the AI cost.
+4. **Feature path.** Run `/issue` with a feature request; the preview says
+   "Feature request" and uses the Summary / Motivation / Proposed Solution
+   template.
+5. **Duplicate path.** Report the step-3 bug again in different words. The
    reply should be "This looks like an existing issue: #N …" with **Same
-   issue — add my report** / **Not it — show my draft**. Press *Same issue —
-   add my report* and confirm the comment lands on issue #N carrying only
-   what the second report added — or just the "Also reported by …" line
-   when it added nothing — with its own screenshots, and that nothing is
-   announced publicly.
-4. **Closed-issue path.** Close issue #N on GitHub, then report the same bug
-   a third time. The reply should be "This looks like #N …, closed recently.
-   Is it still happening?" with **Still happening** / **Looks fixed**. Press
-   *Still happening*, then *Create issue*, and confirm the new issue's body
-   carries `Possible regression of #N.` (Pressing *Looks fixed* instead just
-   links #N and ends the flow without writing to GitHub.)
-5. **`/issues`.** Run `/issues` and confirm the ephemeral list shows the
-   repository's open issues — it is read live from GitHub, so the issues you
-   just filed are in it — with links that open the right issues (and a
-   "+K more on GitHub" line if the repo has more than fits).
-6. **Image-upload smoke test.** Run
-   `dotnet run --project src/DiscordGithubBot -- --smoke-upload owner/repo`
-   for the same repository and confirm it prints `SMOKE OK: <url>` and that
-   the URL opens the 1×1 PNG. A `github.com/user-attachments/…` URL means
-   the unofficial endpoint worked with your PAT; a
-   `raw.githubusercontent.com/…/issue-assets/…` URL is still a pass — it
-   records that the PAT cannot use the unofficial endpoint and that the
-   Contents-API fallback engaged (the warning in the log names the reason).
-7. **GitHub App credentials.** Swap the app's `GitHubToken` for a
-   `GitHubApp` block (see "GitHub credentials" above) and restart. Run the
-   smoke test again: the first line must now read
-   `auth: GitHub App (installation token)`, and whichever URL it prints is
-   the answer to whether the unofficial endpoint accepts App tokens — record
-   it. Then repeat step 2 and confirm the issue is authored by
-   `<app-name>[bot]` rather than by you, and that the body, label, footer
-   and public announcement are unchanged. Leave the bot running past the
-   hour if you can: the second report after that point exercises the token
-   refresh, and the log says `Minted a GitHub App installation token …` once
-   per hour, not once per report.
+   issue — add my report** / **Not it — show my draft**. Add the report and
+   confirm the comment on #N carries only what the second report added (or
+   just the "Also reported by …" line), and that nothing is announced.
+6. **Closed issues are ignored.** Close #N on GitHub and report the same bug a
+   third time: it now goes straight to a draft preview.
+7. **User install.** Run `/issue-install`, press **Add to my account**, and
+   authorize. In a DM with a friend (or any server without the bot), `/issue`
+   is available and offers only the apps of the configured servers you are
+   in (a dropdown when that is several). The created issue's footer reads
+   "via Discord". From an account in none of the configured servers,
+   `/issue` answers that you're not in any of them instead of opening.
+8. **Rate limit.** With `Limits__ReportsPerUserPerDay=1`, a second `/issue`
+   within a day answers with the time you can report again instead of a modal.
+9. **`/list-issues`.** The ephemeral list shows the repository's open issues
+   with working links; `/issues` is gone from the command list.
+10. **Image-upload smoke test and GitHub App.** As before: `--smoke-upload
+    owner/repo` must print `SMOKE OK: <url>`; then swap the PAT for a
+    `GitHubApp` block, restart, run the smoke test again (first line must say
+    `auth: GitHub App (installation token)`), repeat step 3, and confirm the
+    issue is authored by `<app-name>[bot]` and the code context still
+    appears (the App needs Contents: Read).

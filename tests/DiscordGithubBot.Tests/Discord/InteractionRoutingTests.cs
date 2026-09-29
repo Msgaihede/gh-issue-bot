@@ -25,8 +25,10 @@ public class InteractionRoutingTests
 
         var services = new ServiceCollection()
             .AddSingleton(new BotOptions())
+            .AddSingleton(new AppAccess(new BotOptions(), Substitute.For<IGuildMembership>(), NullLogger<AppAccess>.Instance))
             .AddSingleton(Substitute.For<IReportPipeline>())
             .AddSingleton(Substitute.For<IGitHubService>())
+            .AddSingleton(new ReportRateLimiter(new BotOptions(), TimeProvider.System))
             .AddSingleton(new AttachmentDownloader(new HttpClient(), NullLogger<AttachmentDownloader>.Instance))
             .AddSingleton(client)
             .AddSingleton(NullLoggerFactory.Instance)
@@ -36,26 +38,50 @@ public class InteractionRoutingTests
         return await interactions.AddModuleAsync<ReportInteractionModule>(services);
     }
 
+    /// <summary>One reporting command; the decision model, not the reporter, decides bug or feature.</summary>
     [Fact]
-    public async Task Registers_the_three_slash_commands()
+    public async Task Registers_the_report_command_the_install_link_and_the_issue_list()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(
-            ["issues", "report-issue", "request-feature"],
-            module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(["issue", "issue-install", "list-issues"], module.SlashCommands.Select(c => c.Name).Order());
+    }
+
+    /// <summary>
+    /// The user-install requirement lives in this metadata: without the user integration type the install
+    /// link adds nothing, and without the DM and private-channel contexts a user install could only be used
+    /// in servers anyway. Declared once on the module; this pins that it reaches every command.
+    /// </summary>
+    [Fact]
+    public async Task Every_command_is_user_installable_and_usable_in_servers_dms_and_group_dms()
+    {
+        var module = await BuildModuleAsync();
+
+        Assert.All(module.SlashCommands, command =>
+        {
+            Assert.Equal(
+                [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+                command.IntegrationTypes.Order());
+            Assert.Equal(
+                [InteractionContextType.Guild, InteractionContextType.BotDm, InteractionContextType.PrivateChannel],
+                command.ContextTypes!.Order());
+        });
     }
 
     [Fact]
-    public async Task Report_commands_take_no_options()
+    public async Task The_install_command_takes_no_options()
     {
         var module = await BuildModuleAsync();
 
-        var reportCommands = module.SlashCommands
-            .Where(c => c.Name is "report-issue" or "request-feature").ToList();
+        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue-install").Parameters);
+    }
 
-        Assert.Equal(2, reportCommands.Count);
-        Assert.All(reportCommands, c => Assert.Empty(c.Parameters));
+    [Fact]
+    public async Task The_report_command_takes_no_options()
+    {
+        var module = await BuildModuleAsync();
+
+        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue").Parameters);
     }
 
     [Fact]
@@ -65,8 +91,7 @@ public class InteractionRoutingTests
 
         string[] actions =
         [
-            CustomIds.Create, CustomIds.Cancel, CustomIds.Comment, CustomIds.Draft,
-            CustomIds.StillOpen, CustomIds.Fixed, CustomIds.Pick,
+            CustomIds.Create, CustomIds.Cancel, CustomIds.Comment, CustomIds.Draft, CustomIds.Pick,
         ];
 
         Assert.Equal(
@@ -75,11 +100,11 @@ public class InteractionRoutingTests
     }
 
     [Fact]
-    public async Task Issues_keeps_its_optional_app_option()
+    public async Task List_issues_keeps_its_optional_app_option()
     {
         var module = await BuildModuleAsync();
 
-        var issues = module.SlashCommands.Single(c => c.Name == "issues");
+        var issues = module.SlashCommands.Single(c => c.Name == "list-issues");
         var parameter = Assert.Single(issues.Parameters);
         Assert.Equal("app", parameter.Name);
         Assert.False(parameter.IsRequired);
@@ -91,7 +116,7 @@ public class InteractionRoutingTests
         var module = await BuildModuleAsync();
 
         var modal = Assert.Single(module.ModalCommands);
-        Assert.Equal("report-modal|*|*", modal.Name);
+        Assert.Equal("report-modal|*", modal.Name);
     }
 
     /// <summary>
@@ -106,7 +131,7 @@ public class InteractionRoutingTests
         var modalInfo = Assert.Single(module.ModalCommands).Modal;
 
         var modal = await ((IDiscordInteraction)null!).ToModalAsync(
-            $"report-modal|bug|{ReportModal.PickAppToken}", modalInfo, (ReportModal)null!, null,
+            $"report-modal|{ReportModal.PickAppToken}", modalInfo, (ReportModal)null!, null,
             builder => builder.Components.Insert(0, ReportModal.BuildAppPicker([
                 new AppConfig { Name = "mira", Repo = "acme/mira" },
                 new AppConfig { Name = "nova", Repo = "acme/nova" }])));

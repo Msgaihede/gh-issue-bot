@@ -1,9 +1,10 @@
 using System.Text.Json;
 using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
-using Microsoft.Extensions.AI;
+using DiscordGithubBot.OpenRouter;
 using Microsoft.Extensions.Logging;
 
 namespace DiscordGithubBot.Pipeline;
@@ -13,23 +14,35 @@ public sealed record AttachmentPayload(string FileName, string ContentType, byte
 
 /// <param name="GuildName">
 /// Name of the Discord server the report came from; credited alongside the reporter in the GitHub
-/// footer. Empty when the interaction carried no guild, which drops the server half of the footer.
+/// footer. Empty when the interaction carried no guild the bot knows, which drops the server half of the footer.
 /// </param>
 public sealed record ReportSubmission(
-    AppConfig App, ReportType Type, ulong DiscordUserId,
+    AppConfig App, ulong DiscordUserId,
     string ReporterDisplayName, string GuildName, string RawText,
     IReadOnlyList<AttachmentPayload> Attachments);
 
 /// <summary>A dedup candidate as shown to the user; serialized into PendingReport.CandidatesJson.</summary>
-public sealed record CandidateIssue(int Number, string Title, string State, string Url);
+public sealed record CandidateIssue(int Number, string Title, string Url);
 
-public enum ReportOutcomeKind { MatchOpen, MatchClosed, Uncertain, NoMatch }
+public enum ReportOutcomeKind { Match, Uncertain, NoMatch }
 
-/// <param name="Match">set for MatchOpen/MatchClosed</param>
+/// <param name="Type">what the decision model classified the report as; shown on the preview</param>
+/// <param name="Labels">repository labels the issue will carry; shown on the preview</param>
+/// <param name="Match">set for Match</param>
 /// <param name="Candidates">set for Uncertain (1..5 items); empty otherwise</param>
 public sealed record ReportOutcome(
-    ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft,
+    ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft, ReportType Type, IReadOnlyList<string> Labels,
     CandidateIssue? Match, IReadOnlyList<CandidateIssue> Candidates);
+
+/// <summary>Everything the models decided about a report, before anything is stored or shown.</summary>
+/// <param name="OpenIssues">the open issues the duplicate finder compared the draft with</param>
+public sealed record ReportAnalysis(
+    ReportType Type, NormalizedReport Normalized, DraftReview Review, DuplicateVerdict Verdict,
+    IReadOnlyList<CachedIssue> OpenIssues)
+{
+    /// <summary>The draft as it would ship: the reviewed title over the normalized body.</summary>
+    public IssueDraft Draft => new(Review.Title, Normalized.Body);
+}
 
 /// <param name="Images">screenshots that made it to GitHub, in the order the reporter attached them;
 /// the channel announcement shows them as a media gallery</param>
@@ -48,12 +61,16 @@ public sealed class ExpiredPendingReportException()
 
 public interface IReportPipeline
 {
-    /// <summary>Modal submit -> normalized draft -> dedup verdict. Persists a PendingReport and returns the routed outcome.</summary>
+    /// <summary>Modal submit -> type -> normalized draft -> dedup verdict. Persists a PendingReport and returns the routed outcome.</summary>
     Task<ReportOutcome> ProcessAsync(ReportSubmission submission, CancellationToken ct = default);
 
-    /// <summary>Confirm-create: uploads images, creates the GitHub issue, deletes the pending report.</summary>
+    /// <summary>The model work of <see cref="ProcessAsync"/> without storing anything; what <c>--dry-run</c> prints.</summary>
+    /// <exception cref="NormalizationException"/>
+    Task<ReportAnalysis> AnalyzeAsync(AppConfig app, string rawText, CancellationToken ct = default);
+
+    /// <summary>Confirm-create: uploads images, adds code context, creates the GitHub issue, deletes the pending report.</summary>
     /// <exception cref="ExpiredPendingReportException"/>
-    Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, int? regressionOfIssueNumber, CancellationToken ct = default);
+    Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default);
 
     /// <summary>Confirm-duplicate: uploads images, comments on the existing issue, deletes the pending report.</summary>
     /// <exception cref="ExpiredPendingReportException"/>
@@ -67,59 +84,52 @@ public interface IReportPipeline
 }
 
 /// <summary>
-/// Runs a report end to end: normalize, embed, rank the cached issues, ask the judge, and park the
-/// draft as a <see cref="PendingReport"/> so a later button click can finish the job. Nothing reaches
+/// Runs a report end to end: classify it, draft it, check it against the repo's open issues, and park
+/// the draft as a <see cref="PendingReport"/> so a later button click can finish the job. Nothing reaches
 /// GitHub from <see cref="ProcessAsync"/> — the reporter always confirms first, and the pending row is
 /// only dropped once GitHub has accepted the issue or comment, so a failed call leaves the draft intact
 /// for a retry.
 /// </summary>
 public sealed class ReportPipeline(
+    IReportClassifier classifier,
     IReportNormalizer normalizer,
-    IEmbeddingGenerator<string, Embedding<float>> embedder,
+    IDraftReviewer reviewer,
     IIssueSyncService sync,
-    IDuplicateJudge judge,
+    IDuplicateFinder duplicates,
     IPendingReportStore store,
     IGitHubService gitHub,
     IImageUploader imageUploader,
     IAdditionalInfoExtractor extractor,
+    ICodeContextPrefetcher codeContext,
+    AiUsageMeter usage,
     BotOptions options,
     ILogger<ReportPipeline> logger) : IReportPipeline
 {
-    /// <summary>How many ranked issues are shown to the judge and offered to the reporter.</summary>
-    private const int MaxCandidates = 5;
-
     public async Task<ReportOutcome> ProcessAsync(ReportSubmission submission, CancellationToken ct = default)
     {
-        // A failed normalization throws: a half-written issue is worse than none, so the Discord
-        // layer turns NormalizationException into an ephemeral error instead of drafting anything.
-        var draft = await normalizer.NormalizeAsync(submission.Type, submission.App.Name, submission.RawText, ct);
+        var app = submission.App;
+        var analysis = await AnalyzeAsync(app, submission.RawText, ct);
+        var (type, _, review, verdict, openIssues) = analysis;
+        var draft = analysis.Draft;
 
-        var queryVector = await embedder.GenerateVectorAsync(
-            draft.Title + "\n\n" + draft.Body, cancellationToken: ct);
-
-        // Sync first so the candidate set includes issues filed since the last report; it swallows
-        // GitHub failures by contract, in which case dedup runs against the cache as it stands.
-        await sync.SyncAsync(submission.App, ct);
-        var candidates = await sync.GetCandidatesAsync(submission.App.Repo, ct);
-
-        var ranked = VectorRanker.TopK(queryVector, candidates, MaxCandidates);
-        var verdict = await judge.JudgeAsync(draft, ranked.Select(r => r.Issue).ToList(), ct);
-
-        var shortlist = ranked
-            .Select(r => new CandidateIssue(r.Issue.IssueNumber, r.Issue.Title, r.Issue.State, r.Issue.HtmlUrl))
+        var byNumber = openIssues.ToDictionary(i => i.IssueNumber);
+        var shortlist = verdict.Shortlist
+            .Where(byNumber.ContainsKey)
+            .Select(n => new CandidateIssue(n, byNumber[n].Title, byNumber[n].HtmlUrl))
             .ToList();
 
         var pending = new PendingReport
         {
             Id = Guid.NewGuid(),
-            RepoKey = submission.App.Repo,
+            RepoKey = app.Repo,
             DiscordUserId = submission.DiscordUserId,
             ReporterDisplayName = submission.ReporterDisplayName,
             GuildName = submission.GuildName,
-            Type = submission.Type,
+            Type = type,
             OriginalText = submission.RawText,
             DraftTitle = draft.Title,
             DraftBody = draft.Body,
+            LabelsJson = JsonSerializer.Serialize(review.Labels),
             // The whole shortlist is stored, not just the routed subset: a reporter who answers
             // "none of these" must still be able to act on the draft without a second dedup pass.
             CandidatesJson = JsonSerializer.Serialize(shortlist),
@@ -134,28 +144,76 @@ public sealed class ReportPipeline(
 
         await store.SaveAsync(pending, ct);
 
-        return Route(pending.Id, draft, verdict, shortlist);
+        // Built while the reporter reads the preview, so "Create issue" usually finds it ready. Started for
+        // every outcome: a reporter shown a duplicate can still choose "Not it — show my draft".
+        codeContext.Start(pending.Id, app, draft);
+
+        logger.LogInformation(
+            "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI usage {Usage}.",
+            type, app.Repo, verdict.Kind, openIssues.Count, usage);
+        return Route(pending.Id, draft, type, review.Labels, verdict, shortlist);
     }
 
-    public async Task<CreatedIssueResult> CreateIssueAsync(
-        Guid pendingReportId, int? regressionOfIssueNumber, CancellationToken ct = default)
+    public async Task<ReportAnalysis> AnalyzeAsync(AppConfig app, string rawText, CancellationToken ct = default)
+    {
+        // The issue sync and the label listing are GitHub I/O, so they run alongside the model calls.
+        // Both swallow GitHub failures: dedup then runs against the cache as it stands, and the issue
+        // simply goes without labels.
+        var syncing = sync.SyncAsync(app, ct);
+        var listingLabels = ListLabelsQuietlyAsync(app, ct);
+
+        ReportType type;
+        NormalizedReport normalized;
+        try
+        {
+            type = await classifier.ClassifyAsync(app.Name, rawText, ct);
+
+            // A failed normalization throws: a half-written issue is worse than none, so the Discord
+            // layer turns NormalizationException into an ephemeral error instead of drafting anything.
+            normalized = await normalizer.NormalizeAsync(type, app.Name, rawText, ct);
+        }
+        finally
+        {
+            // Awaited on every path: the sync shares this scope's DbContext, which must not be disposed
+            // under it when normalization fails.
+            await syncing;
+        }
+
+        var openIssues = await sync.GetOpenIssuesAsync(app.Repo, ct);
+
+        // Independent decision calls over the same draft, so they run together. Dedup reads the draft
+        // with its first title: the body carries the substance, and waiting for the title choice would
+        // put a second round trip in front of the reporter for no gain.
+        var reviewing = reviewer.ReviewAsync(app, type, normalized, await listingLabels, ct);
+        var finding = duplicates.FindAsync(new IssueDraft(normalized.Titles[0], normalized.Body), openIssues, ct);
+        await Task.WhenAll(reviewing, finding);
+
+        return new ReportAnalysis(type, normalized, await reviewing, await finding, openIssues);
+    }
+
+    public async Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default)
     {
         var (report, app) = await ClaimAsync(pendingReportId, ct);
 
         try
         {
-            var (images, failedUploads) = await UploadAttachmentsAsync(app, report, ct);
+            // The code context was started in the background when the preview was shown, and is written into
+            // the GitHub issue only (never shown in Discord). Usually it is ready; if the reporter was quick it
+            // is awaited here, alongside the uploads. WhenAll waits for both even when one fails, so the claim
+            // release below never races the database.
+            var uploading = UploadAttachmentsAsync(app, report, ct);
+            var enriching = codeContext.GetAsync(report, app, ct);
+            await Task.WhenAll(uploading, enriching);
+            var (images, failedUploads) = await uploading;
 
             var body = IssueBodyComposer.ComposeIssueBody(
-                report.DraftBody, report.ReporterDisplayName, report.GuildName,
-                images, failedUploads, regressionOfIssueNumber);
-            var label = report.Type == ReportType.Bug ? "bug" : "enhancement";
-
-            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, label, ct);
+                report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads, await enriching);
+            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, Labels(report), ct);
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Created issue #{Number} in {Repo} for {Reporter}.", issue.Number, app.Repo, report.ReporterDisplayName);
+                "Created issue #{Number} in {Repo} for {Reporter}; AI usage {Usage}.",
+                issue.Number, app.Repo, report.ReporterDisplayName, usage);
             return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch
@@ -196,19 +254,19 @@ public sealed class ReportPipeline(
     /// <summary>
     /// What a duplicate comment should say: only what the report adds to the matched issue, and "" when
     /// it adds nothing (the composer then posts the attribution line alone). The comparison runs against
-    /// the cached title and body excerpt — the same text the judge matched on. When the issue is missing
-    /// from the cache or extraction fails, the full draft is posted instead, exactly as before this
-    /// feature: a redundant comment is recoverable, silently dropped details are not.
+    /// the cached title and body excerpt — the same text the duplicate finder read. When the issue is
+    /// missing from the cache (closed since, say) or extraction fails, the full draft is posted instead:
+    /// a redundant comment is recoverable, silently dropped details are not.
     /// </summary>
     private async Task<string> AdditionalInfoOrDraftAsync(
         PendingReport report, int issueNumber, CancellationToken ct)
     {
-        var candidates = await sync.GetCandidatesAsync(report.RepoKey, ct);
-        var existing = candidates.FirstOrDefault(c => c.IssueNumber == issueNumber);
+        var openIssues = await sync.GetOpenIssuesAsync(report.RepoKey, ct);
+        var existing = openIssues.FirstOrDefault(c => c.IssueNumber == issueNumber);
         if (existing is null)
         {
             logger.LogWarning(
-                "Issue #{Number} is not in the candidate cache for {Repo}; commenting with the full draft.",
+                "Issue #{Number} is not in the open-issue cache for {Repo}; commenting with the full draft.",
                 issueNumber, report.RepoKey);
             return report.DraftBody;
         }
@@ -227,54 +285,78 @@ public sealed class ReportPipeline(
         return info;
     }
 
+    /// <summary>The label names chosen at submit time; a row that cannot be read carries none.</summary>
+    public static IReadOnlyList<string> Labels(PendingReport report)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(report.LabelsJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The repository's labels, or none when GitHub cannot list them — a report never fails over labels.</summary>
+    private async Task<IReadOnlyList<RepoLabel>> ListLabelsQuietlyAsync(AppConfig app, CancellationToken ct)
+    {
+        try
+        {
+            return await gitHub.ListLabelsAsync(app, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Listing labels for {Repo} failed; the issue will carry none.", app.Repo);
+            return [];
+        }
+    }
+
     public Task CancelAsync(Guid pendingReportId, CancellationToken ct = default) =>
         store.DeleteAsync(pendingReportId, ct);
 
     public Task<PendingReport?> PeekAsync(Guid pendingReportId, CancellationToken ct = default) =>
         store.GetAsync(pendingReportId, ct);
 
-    /// <summary>Turns the judge's verdict into the flow the Discord layer should show.</summary>
+    /// <summary>Turns the duplicate verdict into the flow the Discord layer should show.</summary>
     private ReportOutcome Route(
-        Guid id, IssueDraft draft, DuplicateVerdict verdict, IReadOnlyList<CandidateIssue> shortlist) =>
-        verdict.Kind switch
-        {
-            VerdictKind.Match => Matched(id, draft, verdict.IssueNumber, shortlist),
-            VerdictKind.Uncertain => Uncertain(
-                id, draft, shortlist.Where(c => verdict.CandidateNumbers.Contains(c.Number)).ToList()),
-            _ => NoMatch(id, draft),
-        };
-
-    private ReportOutcome Matched(
-        Guid id, IssueDraft draft, int? issueNumber, IReadOnlyList<CandidateIssue> shortlist)
+        Guid id, IssueDraft draft, ReportType type, IReadOnlyList<string> labels,
+        DuplicateVerdict verdict, IReadOnlyList<CandidateIssue> shortlist)
     {
-        var match = shortlist.FirstOrDefault(c => c.Number == issueNumber);
-        if (match is null)
+        var none = new ReportOutcome(ReportOutcomeKind.NoMatch, id, draft, type, labels, null, []);
+
+        switch (verdict.Kind)
         {
-            // The judge only ever matches an issue it was offered, so this is a contract violation
-            // rather than an expected path — asking the reporter beats acting on an unknown issue.
-            logger.LogWarning(
-                "The duplicate judge matched #{Number}, which was not among the candidates; asking the reporter.",
-                issueNumber);
-            return Uncertain(id, draft, shortlist);
+            case VerdictKind.Match when shortlist.FirstOrDefault(c => c.Number == verdict.IssueNumber) is { } match:
+                return none with { Kind = ReportOutcomeKind.Match, Match = match };
+
+            case VerdictKind.Match:
+                // The finder only matches an issue it shortlisted, so this is a contract violation rather
+                // than an expected path — asking the reporter beats acting on an unknown issue.
+                logger.LogWarning(
+                    "The duplicate finder matched #{Number}, which was not among the candidates; asking the reporter.",
+                    verdict.IssueNumber);
+                return Uncertain(none, shortlist);
+
+            case VerdictKind.Uncertain:
+                // Kept in the finder's order, most likely first, which is the order the pick list shows.
+                return Uncertain(none, verdict.CandidateNumbers
+                    .Select(n => shortlist.FirstOrDefault(c => c.Number == n))
+                    .OfType<CandidateIssue>()
+                    .ToList());
+
+            default:
+                return none;
         }
-
-        // An issue closed inside the candidate window gets the "is it still happening?" flow instead
-        // of a plain duplicate link, so a regression is filed as a new issue referencing the old one.
-        var kind = string.Equals(match.State, "open", StringComparison.OrdinalIgnoreCase)
-            ? ReportOutcomeKind.MatchOpen
-            : ReportOutcomeKind.MatchClosed;
-
-        return new ReportOutcome(kind, id, draft, match, []);
     }
 
     /// <summary>Uncertain needs something to pick from; with nothing to show it is just a preview.</summary>
-    private static ReportOutcome Uncertain(Guid id, IssueDraft draft, IReadOnlyList<CandidateIssue> shortlist) =>
-        shortlist.Count > 0
-            ? new ReportOutcome(ReportOutcomeKind.Uncertain, id, draft, null, shortlist)
-            : NoMatch(id, draft);
-
-    private static ReportOutcome NoMatch(Guid id, IssueDraft draft) =>
-        new(ReportOutcomeKind.NoMatch, id, draft, null, []);
+    private static ReportOutcome Uncertain(ReportOutcome none, IReadOnlyList<CandidateIssue> candidates) =>
+        candidates.Count > 0 ? none with { Kind = ReportOutcomeKind.Uncertain, Candidates = candidates } : none;
 
     /// <summary>
     /// Takes exclusive ownership of a pending report and finds the app that owns its repository. Every

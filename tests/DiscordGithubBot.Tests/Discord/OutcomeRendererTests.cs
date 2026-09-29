@@ -38,7 +38,7 @@ public class OutcomeRendererTests
     [Fact]
     public void Open_match_offers_to_comment_on_that_issue()
     {
-        var match = new CandidateIssue(7, "Crash on launch", "open", "https://github.com/acme/mira/issues/7");
+        var match = new CandidateIssue(7, "Crash on launch", "https://github.com/acme/mira/issues/7");
 
         var message = OutcomeRenderer.RenderMatch(match, PendingId);
 
@@ -49,29 +49,16 @@ public class OutcomeRendererTests
     }
 
     [Fact]
-    public void Closed_match_asks_whether_it_is_still_happening()
-    {
-        var match = new CandidateIssue(7, "Crash on launch", "closed", "https://github.com/acme/mira/issues/7");
-
-        var message = OutcomeRenderer.RenderMatch(match, PendingId);
-
-        Assert.Contains("Is it still happening", Text(message));
-        Assert.Equal(
-            [CustomIds.Build(CustomIds.StillOpen, PendingId, 7), CustomIds.Build(CustomIds.Fixed, PendingId, 7)],
-            Buttons(message).Select(b => b.CustomId));
-    }
-
-    [Fact]
     public void Uncertain_lists_the_candidates_and_an_escape_hatch()
     {
         var candidates = new List<CandidateIssue>
         {
-            new(7, "Crash on launch", "open", "https://github.com/acme/mira/issues/7"),
-            new(9, "Crash on resume", "closed", "https://github.com/acme/mira/issues/9"),
+            new(7, "Crash on launch", "https://github.com/acme/mira/issues/7"),
+            new(9, "Crash on resume", "https://github.com/acme/mira/issues/9"),
         };
 
-        var message = OutcomeRenderer.Render(
-            new ReportOutcome(ReportOutcomeKind.Uncertain, PendingId, new IssueDraft("t", "b"), null, candidates));
+        var message = OutcomeRenderer.Render(new ReportOutcome(
+            ReportOutcomeKind.Uncertain, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, candidates));
 
         var menu = Assert.Single(Flatten(message).OfType<SelectMenuComponent>());
         Assert.Equal(CustomIds.Build(CustomIds.Pick, PendingId), menu.CustomId);
@@ -83,7 +70,7 @@ public class OutcomeRendererTests
     public void No_match_previews_the_draft_with_create_and_cancel()
     {
         var message = OutcomeRenderer.Render(new ReportOutcome(
-            ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("App crashes", "Steps..."), null, []));
+            ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("App crashes", "Steps..."), ReportType.Bug, [], null, []));
 
         Assert.Contains("**App crashes**", Text(message));
         Assert.Equal(
@@ -92,19 +79,31 @@ public class OutcomeRendererTests
         Assert.Equal([ButtonStyle.Success, ButtonStyle.Danger], Buttons(message).Select(b => b.Style));
     }
 
-    [Fact]
-    public void A_regression_draft_carries_the_old_issue_into_the_create_button()
+    /// <summary>The reporter no longer picks the type, so the preview says what the model decided.</summary>
+    [Theory]
+    [InlineData(ReportType.Bug, "Bug report")]
+    [InlineData(ReportType.Feature, "Feature request")]
+    public void The_draft_preview_shows_the_classified_type(ReportType type, string expected)
     {
-        var message = OutcomeRenderer.RenderDraftPreview(new IssueDraft("App crashes", "Steps..."), PendingId, 7);
+        var message = OutcomeRenderer.RenderDraftPreview(new IssueDraft("App crashes", "Steps..."), type, [], PendingId);
 
-        Assert.Equal(CustomIds.Build(CustomIds.Create, PendingId, 7), Buttons(message)[0].CustomId);
+        Assert.Contains($"-# {expected}", Text(message));
+    }
+
+    [Fact]
+    public void The_draft_preview_lists_the_chosen_labels()
+    {
+        var message = OutcomeRenderer.RenderDraftPreview(
+            new IssueDraft("App crashes", "Steps..."), ReportType.Bug, ["bug", "android"], PendingId);
+
+        Assert.Contains("-# Bug report · Labels: `bug`, `android`", Text(message));
     }
 
     [Fact]
     public void A_notice_is_rendered_into_the_message_rather_than_passed_as_content()
     {
         var message = OutcomeRenderer.Render(
-            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), null, []),
+            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, []),
             "⚠️ Skipped: notes.txt");
 
         Assert.Contains("⚠️ Skipped: notes.txt", Text(message));
@@ -211,7 +210,7 @@ public class OutcomeRendererTests
     public void A_runaway_draft_title_is_cut_to_its_own_cap()
     {
         var message = OutcomeRenderer.RenderDraftPreview(
-            new IssueDraft(new string('t', 500), "body"), PendingId);
+            new IssueDraft(new string('t', 500), "body"), ReportType.Bug, [], PendingId);
 
         var text = Text(message);
         Assert.DoesNotContain(new string('t', 200), text);
@@ -222,7 +221,7 @@ public class OutcomeRendererTests
     public void A_runaway_skipped_files_notice_is_cut_to_its_own_cap()
     {
         var message = OutcomeRenderer.Render(
-            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), null, []),
+            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, []),
             "⚠️ Skipped: " + new string('f', 2000));
 
         var text = Text(message);
@@ -235,16 +234,15 @@ public class OutcomeRendererTests
     public void No_rendered_message_can_exceed_the_whole_message_budget()
     {
         var huge = new string('x', 5000);
-        var candidates = new List<CandidateIssue> { new(7, huge, "open", "https://github.com/acme/mira/issues/7") };
+        var candidates = new List<CandidateIssue> { new(7, huge, "https://github.com/acme/mira/issues/7") };
 
         MessageComponent[] messages =
         [
-            OutcomeRenderer.RenderDraftPreview(new IssueDraft(huge, huge), PendingId, notice: huge),
+            OutcomeRenderer.RenderDraftPreview(new IssueDraft(huge, huge), ReportType.Feature, [huge, huge], PendingId, notice: huge),
             OutcomeRenderer.RenderMatch(candidates[0], PendingId, huge),
-            OutcomeRenderer.RenderMatch(
-                new CandidateIssue(9, huge, "closed", "https://github.com/acme/mira/issues/9"), PendingId, huge),
             OutcomeRenderer.Render(
-                new ReportOutcome(ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), null, candidates),
+                new ReportOutcome(
+                    ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), ReportType.Bug, [], null, candidates),
                 huge),
             OutcomeRenderer.RenderAnnouncement(
                 new CreatedIssueResult(12, huge, "https://github.com/acme/mira/issues/12", []), huge, huge, ReportType.Bug),
@@ -252,6 +250,19 @@ public class OutcomeRendererTests
 
         Assert.All(messages, m => Assert.True(
             Text(m).Length <= 3800, $"a rendered message grew to {Text(m).Length} characters"));
+    }
+
+    [Fact]
+    public void The_install_answer_is_a_link_button_to_the_user_install_url()
+    {
+        var url = InstallLinks.UserInstall(123456789012345678);
+
+        var button = Assert.Single(Buttons(OutcomeRenderer.RenderInstallLink(url)));
+
+        Assert.Equal(ButtonStyle.Link, button.Style);
+        Assert.Equal(
+            "https://discord.com/oauth2/authorize?client_id=123456789012345678&integration_type=1&scope=applications.commands",
+            button.Url);
     }
 
     [Fact]

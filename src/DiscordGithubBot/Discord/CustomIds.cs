@@ -6,7 +6,7 @@ namespace DiscordGithubBot.Discord;
 /// The one place where interaction custom ids are written and read. Every button, select menu and the
 /// modal route through this codec, so a click can be resolved without any server-side session state:
 /// the id carries the action, the pending report it belongs to and the issue number it acts on.
-/// Discord caps custom ids at 100 characters — <c>rep|stillopen|{32 hex}|{int}</c> fits in 57.
+/// Discord caps custom ids at 100 characters — <c>rep|comment|{32 hex}|{int}</c> fits in 55.
 /// </summary>
 public static class CustomIds
 {
@@ -15,16 +15,11 @@ public static class CustomIds
     public const string Cancel = "cancel";
     public const string Comment = "comment";
     public const string Draft = "draft";
-    public const string StillOpen = "stillopen";
-    public const string Fixed = "fixed";
     public const string Pick = "pick";
 
     private const int Segments = 4;
 
-    /// <param name="issueNumber">
-    /// Meaning depends on the action: the issue to comment on, the issue a regression refers back to,
-    /// or 0 when the action needs no issue.
-    /// </param>
+    /// <param name="issueNumber">The issue to comment on, or 0 when the action needs no issue.</param>
     public static string Build(string action, Guid id, int issueNumber = 0) =>
         $"{Prefix}|{action}|{id:N}|{issueNumber}";
 

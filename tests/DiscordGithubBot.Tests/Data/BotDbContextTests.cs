@@ -25,30 +25,22 @@ public sealed class BotDbContextTests : IDisposable
     }
 
     [Fact]
-    public void Vector_conversion_round_trips()
-    {
-        float[] v = [1.5f, -2.25f, 0f, 3.75f];
-        Assert.Equal(v, VectorConversion.FromBytes(VectorConversion.ToBytes(v)));
-        Assert.Empty(VectorConversion.FromBytes(VectorConversion.ToBytes([])));
-    }
-
-    [Fact]
-    public void IssueEmbedding_persists_vector_as_blob_and_round_trips()
+    public void A_cached_issue_round_trips()
     {
         using (var ctx = NewContext())
         {
-            ctx.IssueEmbeddings.Add(new IssueEmbedding
+            ctx.CachedIssues.Add(new CachedIssue
             {
                 RepoKey = "owner/repo", IssueNumber = 7, Title = "Crash on live",
-                State = "open", UpdatedAtUtc = DateTime.UtcNow, ContentHash = "abc",
-                Vector = [0.1f, 0.2f, 0.3f],
+                UpdatedAtUtc = DateTime.UtcNow, BodyExcerpt = "It crashes.", HtmlUrl = "https://x/7",
             });
             ctx.SaveChanges();
         }
         using (var ctx = NewContext())
         {
-            var e = ctx.IssueEmbeddings.Single();
-            Assert.Equal([0.1f, 0.2f, 0.3f], e.Vector);
+            var e = ctx.CachedIssues.Single();
+            Assert.Equal("Crash on live", e.Title);
+            Assert.Equal("It crashes.", e.BodyExcerpt);
         }
     }
 
@@ -56,9 +48,9 @@ public sealed class BotDbContextTests : IDisposable
     public void Duplicate_repo_and_issue_number_violates_unique_index()
     {
         using var ctx = NewContext();
-        ctx.IssueEmbeddings.AddRange(
-            new IssueEmbedding { RepoKey = "o/r", IssueNumber = 1, Title = "a", State = "open", ContentHash = "h" },
-            new IssueEmbedding { RepoKey = "o/r", IssueNumber = 1, Title = "b", State = "open", ContentHash = "h" });
+        ctx.CachedIssues.AddRange(
+            new CachedIssue { RepoKey = "o/r", IssueNumber = 1, Title = "a" },
+            new CachedIssue { RepoKey = "o/r", IssueNumber = 1, Title = "b" });
         Assert.Throws<DbUpdateException>(() => ctx.SaveChanges());
     }
 

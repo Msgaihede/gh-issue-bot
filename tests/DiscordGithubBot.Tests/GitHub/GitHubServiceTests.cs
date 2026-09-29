@@ -18,20 +18,20 @@ public class GitHubServiceTests
         new(fake.CreateClient(), new PassThroughAuthProvider());
 
     [Fact]
-    public async Task CreateIssue_posts_title_body_label_and_bearer_token()
+    public async Task CreateIssue_posts_title_body_labels_and_bearer_token()
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Created,
             """{"number":42,"title":"T","body":"B","state":"open","updated_at":"2026-08-18T00:00:00Z","closed_at":null,"html_url":"https://github.com/owner/repo/issues/42"}""");
         var svc = Service(fake);
 
-        var issue = await svc.CreateIssueAsync(App, "T", "B", "bug");
+        var issue = await svc.CreateIssueAsync(App, "T", "B", ["bug", "ui"]);
 
         Assert.Equal(42, issue.Number);
         Assert.Equal("https://github.com/owner/repo/issues/42", issue.HtmlUrl);
         var req = Assert.Single(fake.Requests);
         Assert.Equal("Bearer PAT123", req.AuthHeader);
-        Assert.Contains("\"bug\"", req.Body);
+        Assert.Contains("\"labels\":[\"bug\",\"ui\"]", req.Body);
         Assert.Contains("\"T\"", req.Body);
     }
 
@@ -98,11 +98,80 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task Labels_are_listed_with_their_descriptions_across_pages()
+    {
+        var fake = new FakeHttpMessageHandler();
+        var page1 = "[" + string.Join(",", Enumerable.Range(1, 100)
+            .Select(i => $$"""{"name":"l{{i}}","description":null}""")) + "]";
+        fake.When(HttpMethod.Get, "labels?per_page=100&page=1", HttpStatusCode.OK, page1);
+        fake.When(HttpMethod.Get, "labels?per_page=100&page=2", HttpStatusCode.OK,
+            """[{"name":"bug","description":"Something isn't working"}]""");
+
+        var labels = await Service(fake).ListLabelsAsync(App);
+
+        Assert.Equal(101, labels.Count);
+        Assert.Equal("", labels[0].Description);
+        Assert.Equal(new RepoLabel("bug", "Something isn't working"), labels[^1]);
+    }
+
+    [Fact]
+    public async Task The_default_branch_head_comes_from_the_repo_then_the_branch()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "repos/owner/repo/branches/main", HttpStatusCode.OK,
+            """{"commit":{"sha":"c0ffee","commit":{"tree":{"sha":"7ree"}}}}""");
+        fake.When(HttpMethod.Get, "repos/owner/repo", HttpStatusCode.OK, """{"default_branch":"main"}""");
+
+        var head = await Service(fake).GetDefaultBranchHeadAsync(App);
+
+        Assert.Equal(new BranchHead("main", "c0ffee", "7ree"), head);
+    }
+
+    [Fact]
+    public async Task The_tree_lists_blobs_only_and_reports_truncation()
+    {
+        var fake = new FakeHttpMessageHandler();
+        fake.When(HttpMethod.Get, "git/trees/7ree?recursive=1", HttpStatusCode.OK, """
+            {"truncated":true,"tree":[
+              {"path":"src","type":"tree","sha":"d1"},
+              {"path":"src/a.cs","type":"blob","sha":"b1","size":120},
+              {"path":"lib","type":"commit","sha":"m1"}]}
+            """);
+
+        var tree = await Service(fake).GetTreeAsync(App, "7ree");
+
+        Assert.True(tree.Truncated);
+        Assert.Equal(new TreeFile("src/a.cs", "b1", 120), Assert.Single(tree.Files));
+    }
+
+    [Fact]
+    public async Task A_blob_is_decoded_and_cut_to_the_requested_length()
+    {
+        var fake = new FakeHttpMessageHandler();
+        // GitHub wraps base64 content with newlines, which JSON carries as "\n".
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("hello world"));
+        fake.When(HttpMethod.Get, "git/blobs/b1", HttpStatusCode.OK,
+            "{\"encoding\":\"base64\",\"content\":\"" + base64[..8] + "\\n" + base64[8..] + "\"}");
+
+        Assert.Equal("hello", await Service(fake).GetBlobTextAsync(App, "b1", 5));
+    }
+
+    [Fact]
+    public async Task A_binary_blob_reads_as_null()
+    {
+        var fake = new FakeHttpMessageHandler();
+        var base64 = Convert.ToBase64String([0x89, 0x50, 0x00, 0x47]);
+        fake.When(HttpMethod.Get, "git/blobs/b1", HttpStatusCode.OK, $$"""{"encoding":"base64","content":"{{base64}}"}""");
+
+        Assert.Null(await Service(fake).GetBlobTextAsync(App, "b1", 100));
+    }
+
+    [Fact]
     public async Task Failure_status_throws()
     {
         var fake = new FakeHttpMessageHandler();
         fake.When(HttpMethod.Post, "repos/owner/repo/issues", HttpStatusCode.Unauthorized, "{}");
         var svc = Service(fake);
-        await Assert.ThrowsAsync<HttpRequestException>(() => svc.CreateIssueAsync(App, "t", "b", "bug"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => svc.CreateIssueAsync(App, "t", "b", ["bug"]));
     }
 }

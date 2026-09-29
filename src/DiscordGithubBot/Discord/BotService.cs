@@ -65,26 +65,34 @@ public sealed class BotService(
     }
 
     /// <summary>
-    /// Commands are registered per guild rather than globally: they appear immediately, and a guild that
-    /// no app is configured for never sees them. Re-registering on a reconnect simply overwrites.
+    /// Commands are registered <em>globally</em>: a user-installed command belongs to no server, and
+    /// per-server registration cannot reach a user's DMs or the servers they carry the bot into. The
+    /// per-guild registrations of earlier versions are overwritten with nothing, or every configured
+    /// server would list each command twice. Both steps overwrite, so a reconnect simply repeats them.
     /// </summary>
     private async Task OnReadyAsync()
     {
-        var guildIds = options.Apps.SelectMany(a => a.GuildIds).Distinct().ToList();
+        try
+        {
+            await interactions.RegisterCommandsGloballyAsync(deleteMissing: true);
+            logger.LogInformation("Slash commands registered globally.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to register the global slash commands.");
+        }
 
-        foreach (var guildId in guildIds)
+        foreach (var guildId in options.Apps.SelectMany(a => a.GuildIds).Distinct())
         {
             try
             {
-                await interactions.RegisterCommandsToGuildAsync(guildId);
+                await client.Rest.BulkOverwriteGuildCommands([], guildId);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to register commands for guild {GuildId}.", guildId);
+                logger.LogWarning(ex, "Could not clear legacy per-server commands in guild {GuildId}.", guildId);
             }
         }
-
-        logger.LogInformation("Slash commands registered for {GuildCount} guild(s).", guildIds.Count);
     }
 
     /// <summary>
