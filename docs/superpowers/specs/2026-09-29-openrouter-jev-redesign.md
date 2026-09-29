@@ -66,7 +66,7 @@ Two thin typed `HttpClient`s (no .NET SDK exists; same reasoning as decision
   host) when flex answers 429/5xx. Flex can also *queue*, which is what got
   it reverted in decision 71, so interactive calls carry a client-side
   deadline (`ChatDeadlineSeconds`, default 30): past it, or on a transient
-  error, the call is retried once on `ChatRetryProviders` (`["openai"]`,
+  error, the call is retried once on `RegularProviders` (`["openai"]`,
   regular tier). Background calls (repo map) get a long deadline instead.
 - **Decisions** — `POST /api/alpha/decisions` with `{model, state,
   questions}`; answers are typed (`choice` / `noul` / `score`) and checked

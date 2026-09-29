@@ -37,7 +37,8 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   `~...-latest` alias — startup rejects aliases; thresholds belong to a build.
 - Flex is only reachable by naming `openai/flex` in `provider.order`
   (a bare `openai` never matches it). Interactive chat calls have a deadline
-  (`ChatDeadlineSeconds`) and one retry on `ChatRetryProviders`.
+  (`ChatDeadlineSeconds`) and one retry on `RegularProviders`. A prompt marked
+  `ChatTier.Regular` (today: only the draft) skips flex entirely.
 - Structured-output schemas are generated from the answer DTO
   (`StructuredOutput`); strict mode needs every property required and no
   nullable members — keep DTO fields non-nullable.

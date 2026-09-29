@@ -68,7 +68,7 @@ public class BotOptionsTests
         Assert.Equal("openai/gpt-6-luna", o.ChatModel);
         Assert.Equal("typesafe/jev-1.13", o.DecisionModel);
         Assert.Equal(["openai/flex", "openai"], o.EffectiveChatProviders);
-        Assert.Equal(["openai"], o.EffectiveChatRetryProviders);
+        Assert.Equal(["openai"], o.EffectiveRegularProviders);
     }
 
     /// <summary>

@@ -18,18 +18,32 @@ public enum ChatUrgency
     Background,
 }
 
+/// <summary>Which OpenAI service tier a call is sent to first.</summary>
+public enum ChatTier
+{
+    /// <summary>Half price, but it can queue: flex first, the regular tier behind it (<c>ChatProviders</c>).</summary>
+    Flex,
+
+    /// <summary>
+    /// Full price, answers promptly (<c>RegularProviders</c>). For the calls a reporter waits on that matter
+    /// most: measured, the draft took 3.2 s here against 7.2 s on flex.
+    /// </summary>
+    Regular,
+}
+
 /// <param name="Name">Names the response schema (letters, digits, <c>_</c>, <c>-</c>) and the call in logs.</param>
 /// <param name="System">Instructions: the rules, the output contract.</param>
 /// <param name="User">The material to work on — reports, issues, code — which is untrusted text.</param>
 /// <param name="MaxTokens">Upper bound on reasoning plus output tokens, and so on the call's cost.</param>
-public sealed record ChatPrompt(string Name, string System, string User, int MaxTokens = 8000);
+/// <param name="Tier">The service tier tried first; a retry always goes to the regular tier.</param>
+public sealed record ChatPrompt(string Name, string System, string User, int MaxTokens = 8000, ChatTier Tier = ChatTier.Flex);
 
 public interface IOpenRouterChat
 {
     /// <summary>
     /// One structured completion, parsed into <typeparamref name="T"/> (its schema is sent as strict JSON
-    /// schema). Tried on the configured provider order first, retried once on the retry order after a
-    /// missed deadline or a transient failure.
+    /// schema). Tried on the prompt's tier first, retried once on the regular tier after a missed deadline or
+    /// a transient failure.
     /// </summary>
     /// <exception cref="OpenRouterException">every failure, once the retry is spent or when it cannot help</exception>
     Task<T> CompleteAsync<T>(ChatPrompt prompt, ChatUrgency urgency, CancellationToken ct = default) where T : class;
@@ -40,7 +54,8 @@ public interface IOpenRouterChat
 /// endpoint (half price) is first and the regular endpoint second, and OpenRouter itself moves on when flex
 /// answers 429 or 5xx. What OpenRouter cannot see is flex <em>queueing</em> — the reason decision 71 once
 /// reverted flex — so an interactive call also carries a client-side deadline, past which it is retried on
-/// the regular tier. Background calls get a long deadline instead and happily wait out the queue.
+/// the regular tier. Background calls get a long deadline instead and happily wait out the queue. A prompt
+/// marked <see cref="ChatTier.Regular"/> skips flex altogether.
 /// </summary>
 public sealed class OpenRouterChatClient(
     HttpClient http, BotOptions options, AiUsageMeter usage, ILogger<OpenRouterChatClient> logger) : IOpenRouterChat
@@ -61,20 +76,21 @@ public sealed class OpenRouterChatClient(
             ? TimeSpan.FromSeconds(o.ChatDeadlineSeconds)
             : BackgroundDeadline;
 
+        var firstProviders = prompt.Tier == ChatTier.Regular ? o.EffectiveRegularProviders : o.EffectiveChatProviders;
         try
         {
-            return await AttemptAsync<T>(prompt, o.EffectiveChatProviders, firstDeadline, ct);
+            return await AttemptAsync<T>(prompt, firstProviders, firstDeadline, ct);
         }
         catch (OpenRouterException ex) when (ex.IsTransient && !ct.IsCancellationRequested)
         {
             logger.LogWarning(
                 "Chat call {Name} on [{Providers}] failed ({Reason}); retrying once on [{RetryProviders}].",
-                prompt.Name, string.Join(", ", o.EffectiveChatProviders), ex.Message,
-                string.Join(", ", o.EffectiveChatRetryProviders));
+                prompt.Name, string.Join(", ", firstProviders), ex.Message,
+                string.Join(", ", o.EffectiveRegularProviders));
         }
 
         var retryDeadline = urgency == ChatUrgency.Interactive ? InteractiveRetryDeadline : BackgroundDeadline;
-        return await AttemptAsync<T>(prompt, o.EffectiveChatRetryProviders, retryDeadline, ct);
+        return await AttemptAsync<T>(prompt, o.EffectiveRegularProviders, retryDeadline, ct);
     }
 
     private async Task<T> AttemptAsync<T>(

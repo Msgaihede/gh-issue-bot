@@ -212,13 +212,18 @@ lives in memory, so a restart resets it.
 | `openai/gpt-6-luna` | OpenRouter chat completions | the draft, repository-map summaries, search terms, code notes, duplicate comments |
 | `voyageai/voyage-4` | OpenRouter embeddings | repository-map summaries and each new issue, for finding its files by meaning |
 
-**Flex first.** Chat calls send `provider.order = ["openai/flex", "openai"]`:
-OpenAI's half-price flex tier first, the regular tier behind it, and
-OpenRouter itself moves on when flex rejects a request. Flex can also queue,
-so a call a reporter is waiting on has `ChatDeadlineSeconds` (30) on the first
-attempt; past that, or after any transient failure, it is retried once on
-`ChatRetryProviders` (`["openai"]`, regular tier). Background work (the
-repository map) waits out the queue. Reasoning effort defaults to `low`.
+**Flex first — except the draft.** Chat calls send `provider.order =
+["openai/flex", "openai"]` (`ChatProviders`): OpenAI's half-price flex tier
+first, the regular tier behind it, and OpenRouter itself moves on when flex
+rejects a request. Flex can also queue, so a call a reporter is waiting on has
+`ChatDeadlineSeconds` (30) on the first attempt; past that, or after any
+transient failure, it is retried once on `RegularProviders` (`["openai"]`,
+the regular tier). The **draft** goes to `RegularProviders` directly: the
+reporter waits on it before seeing anything, and flex more than doubled it
+(7.2 s against 3.2 s measured), for a saving of about $0.0002 a report.
+Search terms, code notes, duplicate comments and the repository map stay on
+flex; background work waits out the queue. Reasoning effort defaults to
+`low`.
 
 **Pinned models.** `DecisionModel` must be a versioned id — startup rejects a
 `~…-latest` alias, because every decision threshold belongs to one build.
@@ -299,7 +304,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
     "ApiKey": "<secret>",
     "ChatModel": "openai/gpt-6-luna",
     "ChatProviders": ["openai/flex", "openai"],
-    "ChatRetryProviders": ["openai"],
+    "RegularProviders": ["openai"],
     "ChatDeadlineSeconds": 30,
     "ReasoningEffort": "low",
     "DecisionModel": "typesafe/jev-1.13",
@@ -320,7 +325,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 }
 ```
 
-`ChatProviders`, `ChatRetryProviders` and `IgnoredLabels` fall back to their
+`ChatProviders`, `RegularProviders` and `IgnoredLabels` fall back to their
 defaults when absent; a configured list replaces the default rather than
 extending it. `Database:Path` is relative to the working directory
 (`db/app.db` by default); the folder is created at startup if it does not

@@ -90,6 +90,18 @@ public class OpenRouterChatClientTests
         Assert.Equal(["openai"], _http.Requests[1].Body!["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
     }
 
+    /// <summary>A regular-tier call never touches flex, first attempt or retry.</summary>
+    [Fact]
+    public async Task A_regular_tier_call_goes_straight_to_the_regular_providers()
+    {
+        _http.Then(HttpStatusCode.TooManyRequests, "{}").Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
+
+        await Client().CompleteAsync<Answer>(Prompt with { Tier = ChatTier.Regular }, ChatUrgency.Interactive);
+
+        Assert.All(_http.Requests, r =>
+            Assert.Equal(["openai"], r.Body!["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.BadGateway)]

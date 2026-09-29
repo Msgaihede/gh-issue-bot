@@ -17,8 +17,11 @@ public sealed class OpenRouterOptions
     /// <summary>Tried first: OpenAI's half-price flex tier, then OpenAI's regular endpoint.</summary>
     public static readonly IReadOnlyList<string> DefaultChatProviders = ["openai/flex", "openai"];
 
-    /// <summary>Where a call goes when the first attempt missed its deadline or failed transiently.</summary>
-    public static readonly IReadOnlyList<string> DefaultChatRetryProviders = ["openai"];
+    /// <summary>
+    /// The regular tier: where a call that must be fast goes (<see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>), and where
+    /// a flex call is retried after missing its deadline or failing transiently.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultRegularProviders = ["openai"];
 
     public string ApiKey { get; set; } = "";
 
@@ -26,18 +29,22 @@ public sealed class OpenRouterOptions
     public string ChatModel { get; set; } = "openai/gpt-6-luna";
 
     /// <summary>
-    /// OpenRouter <c>provider.order</c> for the first attempt of every chat call. Nullable rather than
-    /// initialised because the configuration binder appends to an existing list instead of replacing it —
-    /// a configured list would otherwise land after the defaults. See <see cref="EffectiveChatProviders"/>.
+    /// OpenRouter <c>provider.order</c> for the first attempt of a flex-tier chat call (every call except the
+    /// ones marked <see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>). Nullable rather than initialised because the
+    /// configuration binder appends to an existing list instead of replacing it — a configured list would
+    /// otherwise land after the defaults. See <see cref="EffectiveChatProviders"/>.
     /// </summary>
     public List<string>? ChatProviders { get; set; }
 
-    /// <summary><c>provider.order</c> for the single retry; nullable for the same reason as <see cref="ChatProviders"/>.</summary>
-    public List<string>? ChatRetryProviders { get; set; }
+    /// <summary>
+    /// <c>provider.order</c> for regular-tier calls and for every retry; nullable for the same reason as
+    /// <see cref="ChatProviders"/>.
+    /// </summary>
+    public List<string>? RegularProviders { get; set; }
 
     /// <summary>
     /// How long an interactive chat call (a reporter is waiting) may spend on the first attempt before it is
-    /// retried on <see cref="EffectiveChatRetryProviders"/>. Flex can queue; this caps what that costs.
+    /// retried on <see cref="EffectiveRegularProviders"/>. Flex can queue; this caps what that costs.
     /// </summary>
     public int ChatDeadlineSeconds { get; set; } = 30;
 
@@ -55,7 +62,7 @@ public sealed class OpenRouterOptions
 
     public IReadOnlyList<string> EffectiveChatProviders => ChatProviders ?? DefaultChatProviders;
 
-    public IReadOnlyList<string> EffectiveChatRetryProviders => ChatRetryProviders ?? DefaultChatRetryProviders;
+    public IReadOnlyList<string> EffectiveRegularProviders => RegularProviders ?? DefaultRegularProviders;
 }
 
 public sealed class LimitsOptions

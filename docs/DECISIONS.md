@@ -1421,3 +1421,17 @@ below record the choices inside it that are not obvious from the code.
     upgrade steps (here: two `ALTER TABLE ... ADD COLUMN`) when every version
     in between has one, and only rebuilds otherwise; decision 82's
     rebuild-on-mismatch remains the fallback.
+
+97. **The draft runs on the regular tier; every other chat call stays on
+    flex.** Measured on mtg-grimoire, one run each: the draft took 7.2 s on
+    flex with low reasoning and 3.2 s on the regular tier (3.6 s on flex
+    with no reasoning); search terms 3.6 s / 2.5 s / 3.9 s; reading the
+    picked files plus the code notes 18.5 s / 5.8 s / 10.0 s. The draft is
+    what a reporter waits on before seeing anything, and the regular tier
+    costs about $0.0002 more per report, so it moved (the owner's call);
+    search terms, code notes, duplicate comments and the repository map
+    stay on flex. Chat prompts now carry a `ChatTier`; a `Regular` prompt goes
+    straight to `RegularProviders`, which is also where every flex call is
+    retried — the setting formerly named `ChatRetryProviders`, renamed before
+    first deployment. Decision 77's flex-first default and deadline are
+    otherwise unchanged.

@@ -97,6 +97,7 @@ public class ReportNormalizerTests
 
         var (prompt, urgency) = Assert.Single(chat.Calls);
         Assert.Equal(ChatUrgency.Interactive, urgency);
+        Assert.Equal(ChatTier.Regular, prompt.Tier); // the reporter waits on this one; flex doubled it
         Assert.Contains("the save button does nothing", prompt.User);
         Assert.DoesNotContain("the save button does nothing", prompt.System);
     }

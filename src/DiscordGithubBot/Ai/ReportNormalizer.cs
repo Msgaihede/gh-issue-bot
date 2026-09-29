@@ -44,8 +44,11 @@ public sealed class ReportNormalizer(IOpenRouterChat chat, ILogger<ReportNormali
     public async Task<NormalizedReport> NormalizeAsync(
         ReportType type, string appName, string rawText, CancellationToken ct = default)
     {
+        // The one chat call on the regular tier: the reporter waits on it before seeing anything, and flex
+        // queueing more than doubled it (7.2 s against 3.2 s measured) for a saving of $0.0002 a report.
         var prompt = new ChatPrompt(
-            "issue_draft", SystemPrompt(type), UserPrompt(appName, Truncate(rawText, MaxRawTextChars)), MaxTokens: 6000);
+            "issue_draft", SystemPrompt(type), UserPrompt(appName, Truncate(rawText, MaxRawTextChars)),
+            MaxTokens: 6000, Tier: ChatTier.Regular);
         Exception? lastError = null;
 
         for (var attempt = 1; attempt <= Attempts; attempt++)
