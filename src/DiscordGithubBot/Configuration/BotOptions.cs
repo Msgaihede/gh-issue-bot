@@ -85,6 +85,13 @@ public sealed class AppConfig
 
     public List<ulong> GuildIds { get; set; } = new();
     public List<ulong> ChannelIds { get; set; } = new();
+
+    /// <summary>
+    /// Repository labels never attached automatically. Null means the defaults (triage outcomes such as
+    /// "duplicate" and "wontfix"); an explicit list replaces them. Nullable because the configuration
+    /// binder appends to an initialised list rather than replacing it.
+    /// </summary>
+    public List<string>? IgnoredLabels { get; set; }
 }
 
 /// <summary>

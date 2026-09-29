@@ -1184,3 +1184,28 @@ below record the choices inside it that are not obvious from the code.
     Three alternatives rather than one so the choice can be made separately
     from the writing; until the decision model picks (next feature), the
     first is used.
+
+84. **Jev picks the title and the labels in one request after the draft is
+    written.** `DraftReviewer` asks one `choice` over the draft model's
+    three titles ("which describes the actual problem or request so a
+    maintainer scanning the list understands it without opening it") and one
+    `noul` per repository label — both selection, which is the job a decision
+    model does well and a generative one does not: it cannot pick a title
+    nobody wrote or a label the repository does not have. Labels are
+    independent nouls because several can apply at once; a `choice` would
+    force exactly one. The gate is the pre-probe 0.5. Labels come live from
+    `GET /labels` on every report (a single call alongside the issue sync);
+    a listing failure leaves the issue unlabelled rather than failing the
+    report. Triage outcomes (`duplicate`, `invalid`, `wontfix`,
+    `good first issue`, `help wanted`) are never offered — they record a
+    maintainer's decision, not a property of a fresh report — and an app can
+    replace that list with `IgnoredLabels`. The repository's canonical type
+    label (`bug`; `enhancement`/`feature`) is always attached when it exists,
+    so the classified type and the labels agree on the basics even when the
+    model hesitates; that replaces the old hard-coded `bug`/`enhancement`,
+    which attached labels the repository might not define. The title
+    choice and dedup run in parallel, so dedup reads the draft under its
+    first title — the body carries the substance, and serialising the two
+    would add a round trip in front of the reporter. The preview's small
+    print now shows the chosen labels next to the type. A failed review
+    falls back to the first title and the type label.

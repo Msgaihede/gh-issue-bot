@@ -53,7 +53,7 @@ public static class OutcomeRenderer
         ReportOutcomeKind.Uncertain when outcome.Candidates.Count > 0 =>
             RenderUncertain(outcome.Candidates, outcome.PendingReportId, notice),
         _ => RenderDraftPreview(
-            outcome.Draft, outcome.Type, outcome.PendingReportId,
+            outcome.Draft, outcome.Type, outcome.Labels, outcome.PendingReportId,
             heading: "**No existing issue matches. Here's the draft:**", notice: notice),
     };
 
@@ -68,15 +68,17 @@ public static class OutcomeRenderer
                     "Not it — show my draft", CustomIds.Build(CustomIds.Draft, pendingId)))));
 
     /// <summary>
-    /// Draft preview with Create/Cancel buttons. The type line shows what the decision model classified
-    /// the report as, since the reporter no longer chooses it; Cancel is the way out when it is wrong.
+    /// Draft preview with Create/Cancel buttons. The small print above the title shows what the decision
+    /// model classified the report as and which repository labels it chose, since the reporter picks
+    /// neither; Cancel is the way out when either is wrong.
     /// </summary>
     public static MessageComponent RenderDraftPreview(
-        IssueDraft draft, ReportType type, Guid pendingId, string? heading = null, string? notice = null) =>
+        IssueDraft draft, ReportType type, IReadOnlyList<string> labels, Guid pendingId,
+        string? heading = null, string? notice = null) =>
         Container(container => container
             .WithTextDisplay(Budgeted(
                 Notice(notice) + (heading is null ? "" : heading + "\n") +
-                $"-# {TypeName(type)}\n" +
+                $"-# {TypeName(type)}{LabelList(labels)}\n" +
                 $"**{Truncate(Inline(draft.Title), MaxTitleChars)}**\n{Truncate(draft.Body, MaxBodyChars)}"))
             .WithActionRow(row => row
                 .WithButton(ButtonBuilder.CreateSuccessButton(
@@ -170,6 +172,11 @@ public static class OutcomeRenderer
     }
 
     private static string TypeName(ReportType type) => type == ReportType.Bug ? "Bug report" : "Feature request";
+
+    private static string LabelList(IReadOnlyList<string> labels) =>
+        labels.Count == 0
+            ? ""
+            : " · Labels: " + Truncate(string.Join(", ", labels.Select(l => $"`{l.Replace("`", "'")}`")), MaxNoticeChars);
 
     private static MessageComponent Message(string text) =>
         new ComponentBuilderV2().WithTextDisplay(Truncate(text, MaxBodyChars)).Build();

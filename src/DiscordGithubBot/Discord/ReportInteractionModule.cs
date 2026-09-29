@@ -345,7 +345,8 @@ public class ReportInteractionModule(
         }
 
         await FollowupEphemeralAsync(OutcomeRenderer.RenderDraftPreview(
-            new IssueDraft(pending.DraftTitle, pending.DraftBody), pending.Type, id, heading));
+            new IssueDraft(pending.DraftTitle, pending.DraftBody), pending.Type, ReportPipeline.Labels(pending),
+            id, heading));
     }
 
     /// <summary>Posts the public announcement in every channel the app is configured for; never throws.</summary>

@@ -8,6 +8,9 @@ using DiscordGithubBot.Configuration;
 
 namespace DiscordGithubBot.GitHub;
 
+/// <summary>A label defined in the repository; the description is "" when the repo gives none.</summary>
+public sealed record RepoLabel(string Name, string Description);
+
 /// <summary>A GitHub issue as the bot uses it; timestamps are always UTC.</summary>
 public sealed record GitHubIssue(
     int Number, string Title, string Body, string State,
@@ -20,6 +23,9 @@ public interface IGitHubService
 
     /// <returns>The html_url of the created comment.</returns>
     Task<string> AddCommentAsync(AppConfig app, int issueNumber, string body, CancellationToken ct = default);
+
+    /// <summary>Every label the repository defines, in GitHub's order.</summary>
+    Task<IReadOnlyList<RepoLabel>> ListLabelsAsync(AppConfig app, CancellationToken ct = default);
 
     /// <param name="state">"open" | "closed" | "all"</param>
     /// <param name="sinceUtc">maps to the GitHub 'since' query param (updated-at filter) when set</param>
@@ -80,6 +86,23 @@ public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : I
         }
     }
 
+    public async Task<IReadOnlyList<RepoLabel>> ListLabelsAsync(AppConfig app, CancellationToken ct = default)
+    {
+        var labels = new List<RepoLabel>();
+        for (var page = 1; ; page++)
+        {
+            using var resp = await SendAsync(
+                app, HttpMethod.Get, $"repos/{app.Repo}/labels?per_page={PerPage}&page={page}", payload: null, ct);
+            var dtos = await ReadJsonAsync<List<LabelDto>>(resp, ct);
+
+            labels.AddRange(dtos
+                .Where(d => !string.IsNullOrWhiteSpace(d.Name))
+                .Select(d => new RepoLabel(d.Name!, d.Description ?? "")));
+
+            if (dtos.Count < PerPage) return labels;
+        }
+    }
+
     private async Task<HttpResponseMessage> SendAsync(
         AppConfig app, HttpMethod method, string path, object? payload, CancellationToken ct)
     {
@@ -127,6 +150,12 @@ public sealed class GitHubService(HttpClient http, IGitHubAuthProvider auth) : I
         [JsonPropertyName("closed_at")] public DateTimeOffset? ClosedAt { get; set; }
         [JsonPropertyName("html_url")] public string? HtmlUrl { get; set; }
         [JsonPropertyName("pull_request")] public JsonElement? PullRequest { get; set; }
+    }
+
+    private sealed class LabelDto
+    {
+        [JsonPropertyName("name")] public string? Name { get; set; }
+        [JsonPropertyName("description")] public string? Description { get; set; }
     }
 
     private sealed class CommentDto

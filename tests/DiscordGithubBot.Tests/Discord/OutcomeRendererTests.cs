@@ -58,7 +58,7 @@ public class OutcomeRendererTests
         };
 
         var message = OutcomeRenderer.Render(new ReportOutcome(
-            ReportOutcomeKind.Uncertain, PendingId, new IssueDraft("t", "b"), ReportType.Bug, null, candidates));
+            ReportOutcomeKind.Uncertain, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, candidates));
 
         var menu = Assert.Single(Flatten(message).OfType<SelectMenuComponent>());
         Assert.Equal(CustomIds.Build(CustomIds.Pick, PendingId), menu.CustomId);
@@ -70,7 +70,7 @@ public class OutcomeRendererTests
     public void No_match_previews_the_draft_with_create_and_cancel()
     {
         var message = OutcomeRenderer.Render(new ReportOutcome(
-            ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("App crashes", "Steps..."), ReportType.Bug, null, []));
+            ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("App crashes", "Steps..."), ReportType.Bug, [], null, []));
 
         Assert.Contains("**App crashes**", Text(message));
         Assert.Equal(
@@ -85,16 +85,25 @@ public class OutcomeRendererTests
     [InlineData(ReportType.Feature, "Feature request")]
     public void The_draft_preview_shows_the_classified_type(ReportType type, string expected)
     {
-        var message = OutcomeRenderer.RenderDraftPreview(new IssueDraft("App crashes", "Steps..."), type, PendingId);
+        var message = OutcomeRenderer.RenderDraftPreview(new IssueDraft("App crashes", "Steps..."), type, [], PendingId);
 
         Assert.Contains($"-# {expected}", Text(message));
+    }
+
+    [Fact]
+    public void The_draft_preview_lists_the_chosen_labels()
+    {
+        var message = OutcomeRenderer.RenderDraftPreview(
+            new IssueDraft("App crashes", "Steps..."), ReportType.Bug, ["bug", "android"], PendingId);
+
+        Assert.Contains("-# Bug report · Labels: `bug`, `android`", Text(message));
     }
 
     [Fact]
     public void A_notice_is_rendered_into_the_message_rather_than_passed_as_content()
     {
         var message = OutcomeRenderer.Render(
-            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, null, []),
+            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, []),
             "⚠️ Skipped: notes.txt");
 
         Assert.Contains("⚠️ Skipped: notes.txt", Text(message));
@@ -201,7 +210,7 @@ public class OutcomeRendererTests
     public void A_runaway_draft_title_is_cut_to_its_own_cap()
     {
         var message = OutcomeRenderer.RenderDraftPreview(
-            new IssueDraft(new string('t', 500), "body"), ReportType.Bug, PendingId);
+            new IssueDraft(new string('t', 500), "body"), ReportType.Bug, [], PendingId);
 
         var text = Text(message);
         Assert.DoesNotContain(new string('t', 200), text);
@@ -212,7 +221,7 @@ public class OutcomeRendererTests
     public void A_runaway_skipped_files_notice_is_cut_to_its_own_cap()
     {
         var message = OutcomeRenderer.Render(
-            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, null, []),
+            new ReportOutcome(ReportOutcomeKind.NoMatch, PendingId, new IssueDraft("t", "b"), ReportType.Bug, [], null, []),
             "⚠️ Skipped: " + new string('f', 2000));
 
         var text = Text(message);
@@ -229,11 +238,11 @@ public class OutcomeRendererTests
 
         MessageComponent[] messages =
         [
-            OutcomeRenderer.RenderDraftPreview(new IssueDraft(huge, huge), ReportType.Feature, PendingId, notice: huge),
+            OutcomeRenderer.RenderDraftPreview(new IssueDraft(huge, huge), ReportType.Feature, [huge, huge], PendingId, notice: huge),
             OutcomeRenderer.RenderMatch(candidates[0], PendingId, huge),
             OutcomeRenderer.Render(
                 new ReportOutcome(
-                    ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), ReportType.Bug, null, candidates),
+                    ReportOutcomeKind.Uncertain, PendingId, new IssueDraft(huge, huge), ReportType.Bug, [], null, candidates),
                 huge),
             OutcomeRenderer.RenderAnnouncement(
                 new CreatedIssueResult(12, huge, "https://github.com/acme/mira/issues/12", []), huge, huge, ReportType.Bug),

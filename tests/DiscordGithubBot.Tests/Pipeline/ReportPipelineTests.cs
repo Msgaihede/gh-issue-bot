@@ -14,6 +14,7 @@ public class ReportPipelineTests
 {
     private readonly IReportClassifier _classifier = Substitute.For<IReportClassifier>();
     private readonly IReportNormalizer _normalizer = Substitute.For<IReportNormalizer>();
+    private readonly IDraftReviewer _reviewer = Substitute.For<IDraftReviewer>();
     private readonly IIssueSyncService _sync = Substitute.For<IIssueSyncService>();
     private readonly IDuplicateFinder _finder = Substitute.For<IDuplicateFinder>();
     private readonly IPendingReportStore _store = Substitute.For<IPendingReportStore>();
@@ -30,12 +31,15 @@ public class ReportPipelineTests
 
     public ReportPipelineTests()
     {
-        _sut = new ReportPipeline(_classifier, _normalizer, _sync, _finder, _store, _gitHub, _uploader, _extractor,
+        _sut = new ReportPipeline(_classifier, _normalizer, _reviewer, _sync, _finder, _store, _gitHub, _uploader, _extractor,
             new AiUsageMeter(), new BotOptions { Apps = [App] }, NullLogger<ReportPipeline>.Instance);
         _classifier.ClassifyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ReportType.Bug);
         _normalizer.NormalizeAsync(Arg.Any<ReportType>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new NormalizedReport(["Draft title", "Other title"], "Draft body"));
+        _reviewer.ReviewAsync(Arg.Any<AppConfig>(), Arg.Any<ReportType>(), Arg.Any<NormalizedReport>(),
+                Arg.Any<IReadOnlyList<RepoLabel>>(), Arg.Any<CancellationToken>())
+            .Returns(new DraftReview("Draft title", ["bug"]));
     }
 
     private static PendingReport Pending(Guid id) => new()
@@ -82,6 +86,40 @@ public class ReportPipelineTests
             r.DraftTitle == "Draft title" && r.RepoKey == "owner/repo" && r.Type == ReportType.Feature),
             Arg.Any<CancellationToken>());
         await _gitHub.DidNotReceiveWithAnyArgs().CreateIssueAsync(default!, default!, default!, default!, default);
+    }
+
+    /// <summary>The reviewer's title is the one that ships; its labels ride on the pending report.</summary>
+    [Fact]
+    public async Task The_reviewed_title_and_labels_are_kept_with_the_draft()
+    {
+        SetupOpenIssues();
+        SetupVerdict(VerdictKind.NoMatch);
+        RepoLabel[] repoLabels = [new("bug", ""), new("ui", "")];
+        _gitHub.ListLabelsAsync(App, Arg.Any<CancellationToken>()).Returns(repoLabels);
+        _reviewer.ReviewAsync(App, ReportType.Bug, Arg.Any<NormalizedReport>(), repoLabels, Arg.Any<CancellationToken>())
+            .Returns(new DraftReview("Other title", ["bug", "ui"]));
+
+        var outcome = await _sut.ProcessAsync(Submission());
+
+        Assert.Equal("Other title", outcome.Draft.Title);
+        Assert.Equal(["bug", "ui"], outcome.Labels);
+        await _store.Received(1).SaveAsync(Arg.Is<PendingReport>(r =>
+            r.DraftTitle == "Other title" && r.LabelsJson == "[\"bug\",\"ui\"]"), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_label_listing_failure_leaves_the_reviewer_with_no_labels_and_the_report_going()
+    {
+        SetupOpenIssues();
+        SetupVerdict(VerdictKind.NoMatch);
+        _gitHub.ListLabelsAsync(App, Arg.Any<CancellationToken>())
+            .Returns<IReadOnlyList<RepoLabel>>(_ => throw new HttpRequestException("down"));
+
+        var outcome = await _sut.ProcessAsync(Submission());
+
+        Assert.Equal(ReportOutcomeKind.NoMatch, outcome.Kind);
+        await _reviewer.Received(1).ReviewAsync(App, ReportType.Bug, Arg.Any<NormalizedReport>(),
+            Arg.Is<IReadOnlyList<RepoLabel>>(l => l.Count == 0), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -193,10 +231,11 @@ public class ReportPipelineTests
     }
 
     [Fact]
-    public async Task CreateIssue_uploads_images_composes_body_labels_by_type_and_deletes_pending()
+    public async Task CreateIssue_uploads_images_composes_body_attaches_the_chosen_labels_and_deletes_pending()
     {
         var id = Guid.NewGuid();
         var report = Pending(id);
+        report.LabelsJson = "[\"bug\",\"android\"]";
         report.Attachments =
         [
             new PendingAttachment { FileName = "ok.png", ContentType = "image/png", Bytes = [1] },
@@ -216,7 +255,7 @@ public class ReportPipelineTests
         await _gitHub.Received(1).CreateIssueAsync(App, "T",
             Arg.Is<string>(b => b.Contains("https://gh/ok") && b.Contains("bad.png")
                 && b.Contains("_Created by **markus** in Discord server **Acme HQ**._")),
-            Arg.Is<IReadOnlyList<string>>(l => l.SequenceEqual(new[] { "bug" })), Arg.Any<CancellationToken>());
+            Arg.Is<IReadOnlyList<string>>(l => l.SequenceEqual(new[] { "bug", "android" })), Arg.Any<CancellationToken>());
         await _store.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
     }
 
@@ -364,20 +403,19 @@ public class ReportPipelineTests
             "Issue 7", "body 7", Arg.Any<CancellationToken>());
     }
 
+    /// <summary>A report drafted when the repo's labels could not be read simply goes without.</summary>
     [Fact]
-    public async Task Feature_reports_use_the_enhancement_label()
+    public async Task A_report_without_labels_is_created_without_labels()
     {
         var id = Guid.NewGuid();
-        var report = Pending(id);
-        report.Type = ReportType.Feature;
-        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(report);
+        _store.TryClaimAsync(id, Arg.Any<CancellationToken>()).Returns(Pending(id));
         _gitHub.CreateIssueAsync(App, "T", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(new GitHubIssue(5, "T", "B", "open", DateTime.UtcNow, null, "u"));
 
         await _sut.CreateIssueAsync(id);
 
         await _gitHub.Received(1).CreateIssueAsync(App, "T", Arg.Any<string>(),
-            Arg.Is<IReadOnlyList<string>>(l => l.SequenceEqual(new[] { "enhancement" })), Arg.Any<CancellationToken>());
+            Arg.Is<IReadOnlyList<string>>(l => l.Count == 0), Arg.Any<CancellationToken>());
     }
 
     [Fact]

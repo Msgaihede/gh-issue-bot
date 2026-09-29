@@ -16,7 +16,7 @@ public static class DatabaseSchema
     /// Bump on any change to an entity, column, index or relationship. 0 is an unstamped file, which covers
     /// every database written before the stamp existed.
     /// </summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     /// <returns>true when an existing schema was dropped and rebuilt.</returns>
     public static bool EnsureCurrent(BotDbContext db)

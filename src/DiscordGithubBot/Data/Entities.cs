@@ -52,6 +52,9 @@ public class PendingReport
     public required string DraftTitle { get; set; }
     public required string DraftBody { get; set; }
 
+    /// <summary>Serialized repository label names chosen for the issue, attached when it is created.</summary>
+    public string LabelsJson { get; set; } = "[]";
+
     /// <summary>Serialized duplicate candidates shown to the reporter.</summary>
     public string CandidatesJson { get; set; } = "[]";
 

@@ -26,10 +26,11 @@ public sealed record CandidateIssue(int Number, string Title, string Url);
 public enum ReportOutcomeKind { Match, Uncertain, NoMatch }
 
 /// <param name="Type">what the decision model classified the report as; shown on the preview</param>
+/// <param name="Labels">repository labels the issue will carry; shown on the preview</param>
 /// <param name="Match">set for Match</param>
 /// <param name="Candidates">set for Uncertain (1..5 items); empty otherwise</param>
 public sealed record ReportOutcome(
-    ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft, ReportType Type,
+    ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft, ReportType Type, IReadOnlyList<string> Labels,
     CandidateIssue? Match, IReadOnlyList<CandidateIssue> Candidates);
 
 /// <param name="Images">screenshots that made it to GitHub, in the order the reporter attached them;
@@ -77,6 +78,7 @@ public interface IReportPipeline
 public sealed class ReportPipeline(
     IReportClassifier classifier,
     IReportNormalizer normalizer,
+    IDraftReviewer reviewer,
     IIssueSyncService sync,
     IDuplicateFinder duplicates,
     IPendingReportStore store,
@@ -91,10 +93,11 @@ public sealed class ReportPipeline(
     {
         var app = submission.App;
 
-        // The issue sync is GitHub I/O and the only step here that touches the database, so it runs
-        // alongside the model calls. It swallows GitHub failures by contract, in which case dedup runs
-        // against the cache as it stands.
+        // The issue sync and the label listing are GitHub I/O, so they run alongside the model calls.
+        // Both swallow GitHub failures: dedup then runs against the cache as it stands, and the issue
+        // simply goes without labels.
         var syncing = sync.SyncAsync(app, ct);
+        var listingLabels = ListLabelsQuietlyAsync(app, ct);
 
         ReportType type;
         NormalizedReport normalized;
@@ -113,9 +116,18 @@ public sealed class ReportPipeline(
             await syncing;
         }
 
-        var draft = new IssueDraft(normalized.Titles[0], normalized.Body);
         var openIssues = await sync.GetOpenIssuesAsync(app.Repo, ct);
-        var verdict = await duplicates.FindAsync(draft, openIssues, ct);
+
+        // Independent decision calls over the same draft, so they run together. Dedup reads the draft
+        // with its first title: the body carries the substance, and waiting for the title choice would
+        // put a second round trip in front of the reporter for no gain.
+        var reviewing = reviewer.ReviewAsync(app, type, normalized, await listingLabels, ct);
+        var finding = duplicates.FindAsync(new IssueDraft(normalized.Titles[0], normalized.Body), openIssues, ct);
+        await Task.WhenAll(reviewing, finding);
+
+        var review = await reviewing;
+        var verdict = await finding;
+        var draft = new IssueDraft(review.Title, normalized.Body);
 
         var byNumber = openIssues.ToDictionary(i => i.IssueNumber);
         var shortlist = verdict.Shortlist
@@ -134,6 +146,7 @@ public sealed class ReportPipeline(
             OriginalText = submission.RawText,
             DraftTitle = draft.Title,
             DraftBody = draft.Body,
+            LabelsJson = JsonSerializer.Serialize(review.Labels),
             // The whole shortlist is stored, not just the routed subset: a reporter who answers
             // "none of these" must still be able to act on the draft without a second dedup pass.
             CandidatesJson = JsonSerializer.Serialize(shortlist),
@@ -151,7 +164,7 @@ public sealed class ReportPipeline(
         logger.LogInformation(
             "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI cost ${Cost} in {Calls} call(s).",
             type, app.Repo, verdict.Kind, openIssues.Count, usage.TotalCost, usage.Calls);
-        return Route(pending.Id, draft, type, verdict, shortlist);
+        return Route(pending.Id, draft, type, review.Labels, verdict, shortlist);
     }
 
     public async Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default)
@@ -164,9 +177,7 @@ public sealed class ReportPipeline(
 
             var body = IssueBodyComposer.ComposeIssueBody(
                 report.DraftBody, report.ReporterDisplayName, report.GuildName, images, failedUploads);
-            var label = report.Type == ReportType.Bug ? "bug" : "enhancement";
-
-            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, [label], ct);
+            var issue = await gitHub.CreateIssueAsync(app, report.DraftTitle, body, Labels(report), ct);
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
@@ -242,6 +253,37 @@ public sealed class ReportPipeline(
         return info;
     }
 
+    /// <summary>The label names chosen at submit time; a row that cannot be read carries none.</summary>
+    public static IReadOnlyList<string> Labels(PendingReport report)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(report.LabelsJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The repository's labels, or none when GitHub cannot list them — a report never fails over labels.</summary>
+    private async Task<IReadOnlyList<RepoLabel>> ListLabelsQuietlyAsync(AppConfig app, CancellationToken ct)
+    {
+        try
+        {
+            return await gitHub.ListLabelsAsync(app, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Listing labels for {Repo} failed; the issue will carry none.", app.Repo);
+            return [];
+        }
+    }
+
     public Task CancelAsync(Guid pendingReportId, CancellationToken ct = default) =>
         store.DeleteAsync(pendingReportId, ct);
 
@@ -250,41 +292,39 @@ public sealed class ReportPipeline(
 
     /// <summary>Turns the duplicate verdict into the flow the Discord layer should show.</summary>
     private ReportOutcome Route(
-        Guid id, IssueDraft draft, ReportType type, DuplicateVerdict verdict, IReadOnlyList<CandidateIssue> shortlist) =>
-        verdict.Kind switch
-        {
-            VerdictKind.Match => Matched(id, draft, type, verdict.IssueNumber, shortlist),
-            // Kept in the finder's order, most likely first, which is the order the pick list shows.
-            VerdictKind.Uncertain => Uncertain(id, draft, type, verdict.CandidateNumbers
-                .Select(n => shortlist.FirstOrDefault(c => c.Number == n))
-                .OfType<CandidateIssue>()
-                .ToList()),
-            _ => NoMatch(id, draft, type),
-        };
-
-    private ReportOutcome Matched(
-        Guid id, IssueDraft draft, ReportType type, int? issueNumber, IReadOnlyList<CandidateIssue> shortlist)
+        Guid id, IssueDraft draft, ReportType type, IReadOnlyList<string> labels,
+        DuplicateVerdict verdict, IReadOnlyList<CandidateIssue> shortlist)
     {
-        var match = shortlist.FirstOrDefault(c => c.Number == issueNumber);
-        if (match is not null) return new ReportOutcome(ReportOutcomeKind.Match, id, draft, type, match, []);
+        var none = new ReportOutcome(ReportOutcomeKind.NoMatch, id, draft, type, labels, null, []);
 
-        // The finder only matches an issue it shortlisted, so this is a contract violation rather than an
-        // expected path — asking the reporter beats acting on an unknown issue.
-        logger.LogWarning(
-            "The duplicate finder matched #{Number}, which was not among the candidates; asking the reporter.",
-            issueNumber);
-        return Uncertain(id, draft, type, shortlist);
+        switch (verdict.Kind)
+        {
+            case VerdictKind.Match when shortlist.FirstOrDefault(c => c.Number == verdict.IssueNumber) is { } match:
+                return none with { Kind = ReportOutcomeKind.Match, Match = match };
+
+            case VerdictKind.Match:
+                // The finder only matches an issue it shortlisted, so this is a contract violation rather
+                // than an expected path — asking the reporter beats acting on an unknown issue.
+                logger.LogWarning(
+                    "The duplicate finder matched #{Number}, which was not among the candidates; asking the reporter.",
+                    verdict.IssueNumber);
+                return Uncertain(none, shortlist);
+
+            case VerdictKind.Uncertain:
+                // Kept in the finder's order, most likely first, which is the order the pick list shows.
+                return Uncertain(none, verdict.CandidateNumbers
+                    .Select(n => shortlist.FirstOrDefault(c => c.Number == n))
+                    .OfType<CandidateIssue>()
+                    .ToList());
+
+            default:
+                return none;
+        }
     }
 
     /// <summary>Uncertain needs something to pick from; with nothing to show it is just a preview.</summary>
-    private static ReportOutcome Uncertain(
-        Guid id, IssueDraft draft, ReportType type, IReadOnlyList<CandidateIssue> candidates) =>
-        candidates.Count > 0
-            ? new ReportOutcome(ReportOutcomeKind.Uncertain, id, draft, type, null, candidates)
-            : NoMatch(id, draft, type);
-
-    private static ReportOutcome NoMatch(Guid id, IssueDraft draft, ReportType type) =>
-        new(ReportOutcomeKind.NoMatch, id, draft, type, null, []);
+    private static ReportOutcome Uncertain(ReportOutcome none, IReadOnlyList<CandidateIssue> candidates) =>
+        candidates.Count > 0 ? none with { Kind = ReportOutcomeKind.Uncertain, Candidates = candidates } : none;
 
     /// <summary>
     /// Takes exclusive ownership of a pending report and finds the app that owns its repository. Every

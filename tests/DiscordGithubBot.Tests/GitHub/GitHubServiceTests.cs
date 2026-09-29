@@ -98,6 +98,23 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task Labels_are_listed_with_their_descriptions_across_pages()
+    {
+        var fake = new FakeHttpMessageHandler();
+        var page1 = "[" + string.Join(",", Enumerable.Range(1, 100)
+            .Select(i => $$"""{"name":"l{{i}}","description":null}""")) + "]";
+        fake.When(HttpMethod.Get, "labels?per_page=100&page=1", HttpStatusCode.OK, page1);
+        fake.When(HttpMethod.Get, "labels?per_page=100&page=2", HttpStatusCode.OK,
+            """[{"name":"bug","description":"Something isn't working"}]""");
+
+        var labels = await Service(fake).ListLabelsAsync(App);
+
+        Assert.Equal(101, labels.Count);
+        Assert.Equal("", labels[0].Description);
+        Assert.Equal(new RepoLabel("bug", "Something isn't working"), labels[^1]);
+    }
+
+    [Fact]
     public async Task Failure_status_throws()
     {
         var fake = new FakeHttpMessageHandler();
