@@ -345,17 +345,40 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void AppsForGuild_filters_by_guild()
+    public void A_configured_server_sees_only_its_own_apps()
     {
         var o = Valid();
         o.Apps.Add(new AppConfig
         {
-            Name = "B", Repo = "owner/other", GitHubToken = "p",
-            GuildIds = [9UL], ChannelIds = [2UL],
+            Name = "Other", Repo = "owner/other", GitHubToken = "p", GuildIds = [9UL], ChannelIds = [2UL],
         });
-        Assert.Single(o.AppsForGuild(1UL));
-        Assert.Equal("owner/other", Assert.Single(o.AppsForGuild(9UL)).Repo);
-        Assert.Empty(o.AppsForGuild(42UL));
+
+        Assert.Equal("owner/repo", Assert.Single(o.AppsForContext(1UL)).Repo);
+        Assert.Equal("owner/other", Assert.Single(o.AppsForContext(9UL)).Repo);
+    }
+
+    /// <summary>
+    /// A user install reaches DMs and servers nobody configured; there every app is on offer, as the
+    /// owner decided — which is also why reports are rate limited per user.
+    /// </summary>
+    [Fact]
+    public void Dms_and_unconfigured_servers_see_every_app()
+    {
+        var o = Valid();
+        o.Apps.Add(new AppConfig
+        {
+            Name = "Other", Repo = "owner/other", GitHubToken = "p", GuildIds = [9UL], ChannelIds = [2UL],
+        });
+
+        Assert.Equal(2, o.AppsForContext(null).Count);
+        Assert.Equal(2, o.AppsForContext(42UL).Count);
+    }
+
+    [Fact]
+    public void A_negative_report_limit_is_rejected()
+    {
+        var o = Valid(); o.Limits.ReportsPerUserPerDay = -1;
+        Assert.Contains(o.Validate(), e => e.Contains("Limits:ReportsPerUserPerDay"));
     }
 
     [Fact]

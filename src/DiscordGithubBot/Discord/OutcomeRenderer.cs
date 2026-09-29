@@ -132,6 +132,15 @@ public static class OutcomeRenderer
         return Container(container => container.WithTextDisplay(Budgeted($"{heading}\n{body}")));
     }
 
+    /// <summary>The <c>/issue-install</c> answer: what installing does, and a link button that does it.</summary>
+    public static MessageComponent RenderInstallLink(string url) =>
+        Container(container => container
+            .WithTextDisplay(
+                "**Add the issue bot to your Discord account**\n" +
+                "Once it's on your account, `/issue` works in any server, DM or group chat — " +
+                "not just the servers it was added to.")
+            .WithActionRow(row => row.WithButton(ButtonBuilder.CreateLinkButton("Add to my account", url))));
+
     /// <summary>
     /// Replaces a clicked message while the slow work runs: the buttons go away, so the same report
     /// cannot be submitted twice from the same message.

@@ -52,6 +52,12 @@ public sealed class OpenRouterOptions
     public IReadOnlyList<string> EffectiveChatRetryProviders => ChatRetryProviders ?? DefaultChatRetryProviders;
 }
 
+public sealed class LimitsOptions
+{
+    /// <summary>Reports one Discord user may submit per rolling 24 hours; 0 turns the cap off.</summary>
+    public int ReportsPerUserPerDay { get; set; } = 10;
+}
+
 public sealed class DatabaseOptions
 {
     public string Path { get; set; } = "db/app.db";
@@ -128,6 +134,7 @@ public sealed class BotOptions
     public DiscordOptions Discord { get; set; } = new();
     public OpenRouterOptions OpenRouter { get; set; } = new();
     public DatabaseOptions Database { get; set; } = new();
+    public LimitsOptions Limits { get; set; } = new();
     public List<AppConfig> Apps { get; set; } = new();
 
     /// <summary>
@@ -141,6 +148,7 @@ public sealed class BotOptions
         if (string.IsNullOrWhiteSpace(Discord.Token)) errors.Add("Discord:Token is required.");
         errors.AddRange(ValidateOpenRouter(OpenRouter));
         if (string.IsNullOrWhiteSpace(Database.Path)) errors.Add("Database:Path is required.");
+        if (Limits.ReportsPerUserPerDay < 0) errors.Add("Limits:ReportsPerUserPerDay must be 0 (off) or positive.");
         if (Apps.Count == 0) errors.Add("Apps: at least one app must be configured.");
 
         for (var i = 0; i < Apps.Count; i++)
@@ -246,9 +254,17 @@ public sealed class BotOptions
         }
     }
 
-    /// <summary>Apps configured for the given Discord guild.</summary>
-    public IReadOnlyList<AppConfig> AppsForGuild(ulong guildId) =>
-        Apps.Where(a => a.GuildIds.Contains(guildId)).ToList();
+    /// <summary>
+    /// The apps a command may report to, given where it was run. A server listed in some app's
+    /// <see cref="AppConfig.GuildIds"/> sees exactly those apps. Anywhere else — a DM with the bot, a group
+    /// DM, or a server the bot was never configured for, all reachable once a user installs the bot on
+    /// their own account — sees every configured app.
+    /// </summary>
+    public IReadOnlyList<AppConfig> AppsForContext(ulong? guildId)
+    {
+        var configured = guildId is { } id ? Apps.Where(a => a.GuildIds.Contains(id)).ToList() : [];
+        return configured.Count > 0 ? configured : Apps;
+    }
 
     /// <summary>The app owning the given "owner/repo", or null when none matches.</summary>
     public AppConfig? AppByRepo(string repo) =>

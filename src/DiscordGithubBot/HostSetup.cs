@@ -94,6 +94,8 @@ public static class HostSetup
         services.AddScoped<IReportPipeline, ReportPipeline>();
 
         // discord
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<ReportRateLimiter>();
         services.AddSingleton(new DiscordSocketClient(new DiscordSocketConfig
         {
             GatewayIntents = GatewayIntents.Guilds,

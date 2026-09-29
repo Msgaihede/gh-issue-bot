@@ -27,6 +27,7 @@ public class InteractionRoutingTests
             .AddSingleton(new BotOptions())
             .AddSingleton(Substitute.For<IReportPipeline>())
             .AddSingleton(Substitute.For<IGitHubService>())
+            .AddSingleton(new ReportRateLimiter(new BotOptions(), TimeProvider.System))
             .AddSingleton(new AttachmentDownloader(new HttpClient(), NullLogger<AttachmentDownloader>.Instance))
             .AddSingleton(client)
             .AddSingleton(NullLoggerFactory.Instance)
@@ -38,11 +39,40 @@ public class InteractionRoutingTests
 
     /// <summary>One reporting command; the decision model, not the reporter, decides bug or feature.</summary>
     [Fact]
-    public async Task Registers_one_report_command_and_the_issue_list()
+    public async Task Registers_the_report_command_the_install_link_and_the_issue_list()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(["issue", "issues"], module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(["issue", "issue-install", "issues"], module.SlashCommands.Select(c => c.Name).Order());
+    }
+
+    /// <summary>
+    /// The user-install requirement lives in this metadata: without the user integration type the install
+    /// link adds nothing, and without the DM and private-channel contexts a user install could only be used
+    /// in servers anyway. Declared once on the module; this pins that it reaches every command.
+    /// </summary>
+    [Fact]
+    public async Task Every_command_is_user_installable_and_usable_in_servers_dms_and_group_dms()
+    {
+        var module = await BuildModuleAsync();
+
+        Assert.All(module.SlashCommands, command =>
+        {
+            Assert.Equal(
+                [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+                command.IntegrationTypes.Order());
+            Assert.Equal(
+                [InteractionContextType.Guild, InteractionContextType.BotDm, InteractionContextType.PrivateChannel],
+                command.ContextTypes!.Order());
+        });
+    }
+
+    [Fact]
+    public async Task The_install_command_takes_no_options()
+    {
+        var module = await BuildModuleAsync();
+
+        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue-install").Parameters);
     }
 
     [Fact]

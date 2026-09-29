@@ -253,6 +253,19 @@ public class OutcomeRendererTests
     }
 
     [Fact]
+    public void The_install_answer_is_a_link_button_to_the_user_install_url()
+    {
+        var url = InstallLinks.UserInstall(123456789012345678);
+
+        var button = Assert.Single(Buttons(OutcomeRenderer.RenderInstallLink(url)));
+
+        Assert.Equal(ButtonStyle.Link, button.Style);
+        Assert.Equal(
+            "https://discord.com/oauth2/authorize?client_id=123456789012345678&integration_type=1&scope=applications.commands",
+            button.Url);
+    }
+
+    [Fact]
     public void The_working_placeholder_has_no_buttons_left_to_click()
     {
         var message = OutcomeRenderer.RenderWorking();

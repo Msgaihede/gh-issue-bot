@@ -20,12 +20,21 @@ namespace DiscordGithubBot.Discord;
 /// Every handler is declared <see cref="RunMode.Sync"/>: <c>BotService</c> owns both the background task the
 /// interaction runs on and the DI scope it resolves from, and it can only dispose that scope once the
 /// handler has finished — which requires the framework to run the handler inline rather than detaching it.
+/// <para>
+/// Every command can be installed on a server <em>or</em> on a user's own account, and runs in servers,
+/// DMs with the bot and group DMs. In a user-installed context the bot is often not a member of the
+/// server the command came from, so nothing here may rely on <c>Context.Guild</c> being set: the server a
+/// command came from is read from the interaction's <c>GuildId</c>, and its name may be unknown.
+/// </para>
 /// </remarks>
+[IntegrationType(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall)]
+[CommandContextType(InteractionContextType.Guild, InteractionContextType.BotDm, InteractionContextType.PrivateChannel)]
 public class ReportInteractionModule(
     BotOptions options,
     IReportPipeline pipeline,
     AttachmentDownloader downloader,
     IGitHubService gitHub,
+    ReportRateLimiter rateLimiter,
     DiscordSocketClient client,
     ILogger<ReportInteractionModule> logger)
     : InteractionModuleBase<SocketInteractionContext>
@@ -38,7 +47,6 @@ public class ReportInteractionModule(
         "That report is no longer waiting — it expired, or another click is already handling it. " +
         "Please run the command again.";
     private const string CancelledMessage = "Cancelled — nothing was created.";
-    private const string GuildOnlyMessage = "This command only works inside a server.";
     private const string GenericErrorMessage =
         "Something went wrong while processing your report. Please try again later.";
     private const string NormalizationErrorMessage =
@@ -54,6 +62,16 @@ public class ReportInteractionModule(
     /// </summary>
     [SlashCommand("issue", "Report a bug or request a feature", runMode: RunMode.Sync)]
     public Task Issue() => OpenModalAsync();
+
+    /// <summary>
+    /// Hands out the link that adds the bot to the caller's own Discord account, after which <c>/issue</c>
+    /// works in any server, DM or group DM — not only in the servers the bot was added to.
+    /// </summary>
+    [SlashCommand("issue-install", "Get a link to add this bot to your own Discord account", runMode: RunMode.Sync)]
+    public Task IssueInstall() =>
+        RespondAsync(
+            components: OutcomeRenderer.RenderInstallLink(InstallLinks.UserInstall(Context.Interaction.ApplicationId)),
+            ephemeral: true);
 
     [SlashCommand("issues", "List open GitHub issues", runMode: RunMode.Sync)]
     public async Task Issues([Summary(description: AppOptionDescription)] string? app = null)
@@ -99,6 +117,16 @@ public class ReportInteractionModule(
             return;
         }
 
+        // Checked again here, not only when the modal opened: one person can open several modals at once.
+        // Counted from here on, because this is where the report starts to cost money.
+        if (rateLimiter.RetryAfter(Context.User.Id) is { } retryAt)
+        {
+            await FollowupAsync(RateLimitedMessage(retryAt), ephemeral: true);
+            return;
+        }
+
+        rateLimiter.Record(Context.User.Id);
+
         // Downloaded before the slow work: Discord's attachment URLs expire, the reporter's bytes must not.
         var (payloads, skipped) = await downloader.DownloadAsync(modal.Screenshots ?? []);
         var notice = skipped.Count == 0
@@ -108,9 +136,8 @@ public class ReportInteractionModule(
         ReportOutcome outcome;
         try
         {
-            // The slash command that opens this modal refuses to run outside a server (OpenModalAsync),
-            // so Guild is set on every path that reaches here; the null-conditional is belt and braces,
-            // and an empty name simply drops the server half of the GitHub footer.
+            // Guild is null in a DM — and in a server the bot is not a member of, which a user install
+            // reaches. An empty name simply drops the server half of the GitHub footer.
             outcome = await pipeline.ProcessAsync(new ReportSubmission(
                 app, Context.User.Id, Context.User.GlobalName ?? Context.User.Username,
                 Context.Guild?.Name ?? "", modal.Description, payloads));
@@ -221,13 +248,14 @@ public class ReportInteractionModule(
 
     private async Task OpenModalAsync()
     {
-        if (Context.Guild is null)
+        // Refused before the reporter types anything; the submit handler checks again.
+        if (rateLimiter.RetryAfter(Context.User.Id) is { } retryAt)
         {
-            await RespondAsync(GuildOnlyMessage, ephemeral: true);
+            await RespondAsync(RateLimitedMessage(retryAt), ephemeral: true);
             return;
         }
 
-        var (app, choices, error) = AppResolution.PlanModal(options.AppsForGuild(Context.Guild.Id));
+        var (app, choices, error) = AppResolution.PlanModal(options.AppsForContext(Context.Interaction.GuildId));
         if (error is not null)
         {
             await RespondAsync(error, ephemeral: true);
@@ -249,15 +277,17 @@ public class ReportInteractionModule(
     }
 
     private (AppConfig? App, string? Error) ResolveApp(string? appName) =>
-        Context.Guild is null
-            ? (null, GuildOnlyMessage)
-            : AppResolution.Resolve(options.AppsForGuild(Context.Guild.Id), appName);
+        AppResolution.Resolve(options.AppsForContext(Context.Interaction.GuildId), appName);
+
+    private static string RateLimitedMessage(DateTimeOffset retryAt) =>
+        "You've sent the most reports allowed in a day. " +
+        $"You can send another <t:{retryAt.ToUnixTimeSeconds()}:R>.";
 
     /// <summary>
-    /// The app a submitted modal is for: named by the custom id when the guild had one app, read from
-    /// the app dropdown when the reporter picked one inside the modal. Resolved against the guild's
-    /// own apps, not every configured one — both values echo back through the client, and another
-    /// guild's repository is not a valid pick here.
+    /// The app a submitted modal is for: named by the custom id when the context had one app, read from
+    /// the app dropdown when the reporter picked one inside the modal. Resolved against the apps of the
+    /// context the modal came from, not every configured one — both values echo back through the client,
+    /// and another server's repository is not a valid pick here.
     /// </summary>
     private (AppConfig? App, string Repo) ResolveModalApp(string repoToken)
     {
@@ -268,10 +298,8 @@ public class ReportInteractionModule(
             : null;
 
         var repo = AppResolution.PickedRepo(repoToken, selectValue);
-        var app = Context.Guild is null
-            ? null
-            : options.AppsForGuild(Context.Guild.Id)
-                .FirstOrDefault(a => string.Equals(a.Repo, repo, StringComparison.OrdinalIgnoreCase));
+        var app = options.AppsForContext(Context.Interaction.GuildId)
+            .FirstOrDefault(a => string.Equals(a.Repo, repo, StringComparison.OrdinalIgnoreCase));
 
         return (app, repo);
     }

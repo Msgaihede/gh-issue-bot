@@ -1209,3 +1209,40 @@ below record the choices inside it that are not obvious from the code.
     would add a round trip in front of the reporter. The preview's small
     print now shows the chosen labels next to the type. A failed review
     falls back to the first title and the type label.
+
+85. **Commands are global and user-installable; `/issue-install` hands out
+    the link.** A user-installed command belongs to no server, so the
+    per-guild registration of decision 5's era cannot reach it: every
+    command is now registered globally with integration types
+    `[GuildInstall, UserInstall]` and contexts `[Guild, BotDm,
+    PrivateChannel]`, declared once on the module (a test pins that
+    Discord.Net carries them to every command). The per-guild registrations
+    of earlier builds are overwritten with an empty set on every Ready, or
+    configured servers would list each command twice. The owner's
+    "/issue login" became `/issue-install` — "login" was the wrong word,
+    and Discord forbids a runnable `/issue` that also has subcommands, so
+    the link command is its own top-level command. It answers with the
+    user-install URL (`integration_type=1`, scope `applications.commands`
+    only) built from the interaction's own application id, so there is
+    nothing to configure — except enabling "User Install" in the Developer
+    Portal. Nothing in the module may rely on `Context.Guild` any more: in a
+    server the bot never joined it is null even though the interaction has
+    a `GuildId`, and the footer then credits the reporter "via Discord".
+
+86. **Outside configured servers, every app is on offer.** A server listed
+    in some app's `GuildIds` still sees exactly those apps; a DM, a group DM,
+    or a server nobody configured (all reachable through a user install)
+    sees every configured app — the owner's choice over an opt-in flag or a
+    membership check. Resolution is one place, `BotOptions.AppsForContext`,
+    used for opening the modal, validating its submit, and `/issues`.
+
+87. **Reports are rate limited per user: 10 per rolling day by default.**
+    With every repository reachable by anyone who installs the bot, and each
+    report spending money on model calls, one account could otherwise burn
+    the month's budget. `ReportRateLimiter` counts submissions in memory
+    (a restart forgives everyone — it guards against runaway use, not
+    determined abuse); the check runs when `/issue` opens the modal, so a
+    reporter is refused before typing, and again on submit, where the report
+    is counted because that is where it starts to cost. The hard ceiling
+    belongs on the OpenRouter key's credit limit, which APP.md tells
+    operators to set. `Limits:ReportsPerUserPerDay = 0` turns the cap off.
