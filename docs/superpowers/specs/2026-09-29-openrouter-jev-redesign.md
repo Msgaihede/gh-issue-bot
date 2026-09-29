@@ -61,7 +61,8 @@ Two thin typed `HttpClient`s (no .NET SDK exists; same reasoning as decision
 
 - **Chat** — `POST /api/v1/chat/completions` with `response_format:
   json_schema` (strict; schema generated from the C# DTO), `reasoning.effort`
-  (default `low`), and `provider: { order: ChatProviders, allow_fallbacks:
+  (default `medium` since decision 99; the repository map's summaries always
+  `low`, decision 102), and `provider: { order: ChatProviders, allow_fallbacks:
   true, require_parameters: true }`. Default `ChatProviders` is
   `["openai/flex", "openai"]`: OpenRouter tries OpenAI's half-price flex
   endpoint first and falls through to the regular endpoint (then any other

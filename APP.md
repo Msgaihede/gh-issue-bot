@@ -126,7 +126,10 @@ starts from the right place:
   file added or changed since the last check — compared by git blob SHA, so an
   edit is never missed — and drops deleted ones. A check runs until the map is
   complete, so the startup check is the whole first build (saved every 400
-  files; a mid-sized repository takes a few minutes on flex). A request
+  files, each such pass logging how many files it summarized and how many
+  are left). Summaries run at reasoning `low` whatever `ReasoningEffort`
+  says, and file contents are fetched eight at a time: at `medium` with one
+  fetch at a time, mtg-grimoire's ~1,550 files took about 35 minutes. A request
   OpenRouter refuses outright (credits exhausted, bad key) ends the check
   without losing anything; the next check picks up where it stopped. Reports
   filed within 10 minutes of a push can still see the previous version of the
@@ -248,7 +251,8 @@ reporter waits on it before seeing anything, and flex more than doubled it
 Search terms, code notes, duplicate comments and the repository map stay on
 flex; background work waits out the queue.
 
-**Reasoning effort** is `medium` for every GPT-6 Luna call, set by
+**Reasoning effort** is `medium` for every GPT-6 Luna call except the
+repository map's one-line summaries (always `low`), set by
 `OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
 model's own default; anything else fails startup. Read side by side on real
@@ -316,6 +320,33 @@ Jev decision's raw probabilities (Debug log). It stores no report and posts
 nothing to Discord or GitHub (it does update the issue cache and the map).
 Adjust the named constants in `DuplicateFinder`, `DraftReviewer`,
 `CodeContextBuilder` if a clear case lands on the wrong side of a gate.
+
+## Logs
+
+Every line is one line (`Logging:Console:FormatterOptions:SingleLine`), and
+what the bot does is logged at Information in its own words; the HTTP client
+factory's four lines per request and Entity Framework's SQL are off
+(`System.Net.Http.HttpClient` and `Microsoft` log at Warning, so their
+failures still show). At startup the bot logs its models, database, and every
+app with its auth mode, servers and channels (never a secret), then "Connected
+to Discord as …". After that, expect:
+
+- one line per interaction: `Handled /issue from alice (123) in server Foo
+  (456) in 0.4 s.` — or why it failed, or why the user was turned away (no
+  app available, daily limit);
+- per report, keyed by an eight-digit report id: `Drafted Bug report 1a2b3c4d
+  … "title", labels …; no duplicate …`, then `Code context for report
+  1a2b3c4d … ready`, then `Created issue #684 … <url>`, `Commented on …` or
+  `Report 1a2b3c4d was cancelled` — each with its AI usage;
+- per repository-map pass that has work: how many files are new or changed
+  and how many this pass takes, then how many it summarized and how many are
+  left; per check with work, one summary line with its duration and cost.
+
+To see more, raise a category with an environment variable, e.g.
+`Logging__LogLevel__DiscordGithubBot=Debug` (every model call with its
+tokens, cost and duration; every map batch) or
+`Logging__LogLevel__System.Net.Http.HttpClient=Information` (every HTTP
+request).
 
 ## Configuration
 

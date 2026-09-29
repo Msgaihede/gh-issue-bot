@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.OpenRouter;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,9 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
         {
             // Yield first, so a long first build can never hold up the start of the other hosted services.
             await Task.Yield();
+            logger.LogInformation(
+                "Checking the repository maps of {Count} app(s) now and every {Minutes} minutes after each check ends.",
+                options.Apps.Count, Interval.TotalMinutes);
 
             while (true)
             {
@@ -48,14 +52,15 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
         try
         {
             await using var scope = scopes.CreateAsyncScope();
+            var started = Stopwatch.GetTimestamp();
             var result = await scope.ServiceProvider.GetRequiredService<IRepoMapService>().UpdateAsync(app, ct);
 
             if (result.Summarized > 0 || result.Removed > 0 || result.Embedded > 0 || !result.Complete)
             {
                 var usage = scope.ServiceProvider.GetRequiredService<AiUsageMeter>();
                 logger.LogInformation(
-                    "Repository map of {Repo}: {Summarized} file(s) summarized, {Embedded} embedded, {Removed} removed, {State}; AI usage {Usage}.",
-                    app.Repo, result.Summarized, result.Embedded, result.Removed,
+                    "Repository map of {Repo} checked in {Elapsed}: {Summarized} file(s) summarized, {Embedded} embedded, {Removed} removed, {State}; AI usage {Usage}.",
+                    app.Repo, FormatElapsed(Stopwatch.GetElapsedTime(started)), result.Summarized, result.Embedded, result.Removed,
                     result.Complete ? "up to date" : "incomplete, retrying at the next check", usage);
             }
         }
@@ -68,4 +73,9 @@ public sealed class RepoMapWorker(IServiceScopeFactory scopes, BotOptions option
             logger.LogWarning(ex, "The repository map update for {Repo} failed; retrying at the next check.", app.Repo);
         }
     }
+
+    /// <summary>"42 s" or "12 min 5 s": a first build runs for minutes, an incremental one for seconds.</summary>
+    internal static string FormatElapsed(TimeSpan elapsed) => elapsed.TotalSeconds < 60
+        ? $"{elapsed.TotalSeconds:0} s"
+        : $"{(int)elapsed.TotalMinutes} min {elapsed.Seconds} s";
 }

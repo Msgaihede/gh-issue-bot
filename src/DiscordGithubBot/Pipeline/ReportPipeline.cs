@@ -149,8 +149,10 @@ public sealed class ReportPipeline(
         codeContext.Start(pending.Id, app, draft);
 
         logger.LogInformation(
-            "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI usage {Usage}.",
-            type, app.Repo, verdict.Kind, openIssues.Count, usage);
+            "Drafted {Type} report {ReportId} for {Repo} from {Reporter}: \"{Title}\", {Labels}; {Verdict} over {Open} open issue(s); AI usage {Usage}.",
+            type, ShortId(pending.Id), app.Repo, submission.ReporterDisplayName, draft.Title,
+            review.Labels.Count == 0 ? "no labels" : "labels " + string.Join(", ", review.Labels),
+            DescribeVerdict(verdict), openIssues.Count, usage);
         return Route(pending.Id, draft, type, review.Labels, verdict, shortlist);
     }
 
@@ -212,8 +214,9 @@ public sealed class ReportPipeline(
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Created issue #{Number} in {Repo} for {Reporter}; AI usage {Usage}.",
-                issue.Number, app.Repo, report.ReporterDisplayName, usage);
+                "Created issue #{Number} in {Repo} from report {ReportId} by {Reporter} ({Images} image(s){Failed}): {Url}; AI usage {Usage}.",
+                issue.Number, app.Repo, ShortId(pendingReportId), report.ReporterDisplayName, images.Count,
+                failedUploads.Count == 0 ? "" : $", {failedUploads.Count} failed", issue.HtmlUrl, usage);
             return new CreatedIssueResult(issue.Number, issue.Title, issue.HtmlUrl, images);
         }
         catch
@@ -240,8 +243,8 @@ public sealed class ReportPipeline(
             await store.DeleteAsync(pendingReportId, ct);
 
             logger.LogInformation(
-                "Commented on issue #{Number} in {Repo} for {Reporter}.",
-                issueNumber, app.Repo, report.ReporterDisplayName);
+                "Commented on issue #{Number} in {Repo} from report {ReportId} by {Reporter}: {Url}; AI usage {Usage}.",
+                issueNumber, app.Repo, ShortId(pendingReportId), report.ReporterDisplayName, commentUrl, usage);
             return new CommentResult(issueNumber, commentUrl);
         }
         catch
@@ -316,8 +319,21 @@ public sealed class ReportPipeline(
         }
     }
 
-    public Task CancelAsync(Guid pendingReportId, CancellationToken ct = default) =>
-        store.DeleteAsync(pendingReportId, ct);
+    public async Task CancelAsync(Guid pendingReportId, CancellationToken ct = default)
+    {
+        await store.DeleteAsync(pendingReportId, ct);
+        logger.LogInformation("Report {ReportId} was cancelled by its reporter.", ShortId(pendingReportId));
+    }
+
+    /// <summary>The first eight hex digits: enough to follow one report through the log, short enough to read.</summary>
+    internal static string ShortId(Guid id) => id.ToString("N")[..8];
+
+    private static string DescribeVerdict(DuplicateVerdict verdict) => verdict.Kind switch
+    {
+        VerdictKind.Match => $"duplicate of #{verdict.IssueNumber}",
+        VerdictKind.Uncertain => $"maybe a duplicate of #{string.Join(", #", verdict.CandidateNumbers)}",
+        _ => "no duplicate",
+    };
 
     public Task<PendingReport?> PeekAsync(Guid pendingReportId, CancellationToken ct = default) =>
         store.GetAsync(pendingReportId, ct);

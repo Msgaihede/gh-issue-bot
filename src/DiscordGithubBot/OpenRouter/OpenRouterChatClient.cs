@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -36,7 +37,11 @@ public enum ChatTier
 /// <param name="User">The material to work on — reports, issues, code — which is untrusted text.</param>
 /// <param name="MaxTokens">Upper bound on reasoning plus output tokens, and so on the call's cost.</param>
 /// <param name="Tier">The service tier tried first; a retry always goes to the regular tier.</param>
-public sealed record ChatPrompt(string Name, string System, string User, int MaxTokens = 8000, ChatTier Tier = ChatTier.Flex);
+/// <param name="ReasoningEffort">
+/// Overrides <c>OpenRouter:ReasoningEffort</c> for this prompt (one of its values); null uses the configured one.
+/// </param>
+public sealed record ChatPrompt(
+    string Name, string System, string User, int MaxTokens = 8000, ChatTier Tier = ChatTier.Flex, string? ReasoningEffort = null);
 
 public interface IOpenRouterChat
 {
@@ -98,6 +103,7 @@ public sealed class OpenRouterChatClient(
     {
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
         attempt.CancelAfter(deadline);
+        var started = Stopwatch.GetTimestamp();
 
         CompletionDto completion;
         try
@@ -127,8 +133,8 @@ public sealed class OpenRouterChatClient(
         var spend = completion.Usage?.Spend;
         usage.Record(spend);
         logger.LogDebug(
-            "Chat call {Name} answered by {Model} via {Provider}: {Prompt} in / {Completion} out, ${Cost}{Byok}.",
-            prompt.Name, completion.Model, completion.Provider,
+            "Chat call {Name} answered by {Model} via {Provider} in {Seconds:0.0} s: {Prompt} in / {Completion} out, ${Cost}{Byok}.",
+            prompt.Name, completion.Model, completion.Provider, Stopwatch.GetElapsedTime(started).TotalSeconds,
             completion.Usage?.PromptTokens, completion.Usage?.CompletionTokens, spend,
             completion.Usage?.IsByok == true ? " (BYOK: billed by the provider)" : "");
 
@@ -191,8 +197,9 @@ public sealed class OpenRouterChatClient(
             ["max_tokens"] = prompt.MaxTokens,
         };
 
-        if (!string.IsNullOrWhiteSpace(o.ReasoningEffort))
-            request["reasoning"] = new JsonObject { ["effort"] = o.ReasoningEffort.Trim() };
+        var effort = prompt.ReasoningEffort ?? o.ReasoningEffort;
+        if (!string.IsNullOrWhiteSpace(effort))
+            request["reasoning"] = new JsonObject { ["effort"] = effort.Trim() };
 
         // require_parameters keeps a fallback from landing on a host that would ignore the JSON schema;
         // service-tier endpoints such as openai/flex are only ever used when named here explicitly.

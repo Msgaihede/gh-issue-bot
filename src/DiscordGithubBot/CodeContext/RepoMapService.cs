@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using DiscordGithubBot.CodeContext.Retrieval;
 using DiscordGithubBot.Configuration;
@@ -79,6 +80,19 @@ public sealed class RepoMapService(
 
     private const int MaxSummaryChars = 300;
 
+    /// <summary>
+    /// Blobs fetched from GitHub at once. Read one by one, the ~0.3 s per blob took a quarter of a first build;
+    /// a handful in flight stays far below GitHub's limit on concurrent requests.
+    /// </summary>
+    internal const int BlobFetchConcurrency = 8;
+
+    /// <summary>
+    /// One-line summaries need little thought, and at the configured <c>medium</c> each batch took ~10 s — most
+    /// of a first build. Not <c>none</c>: that level failed a structured answer in decision 99's comparison, and
+    /// a failed batch here is parked until its files change.
+    /// </summary>
+    internal const string SummaryReasoningEffort = "low";
+
     private const string SystemPrompt = """
         You write the entries of a repository map: one line per file, which another model reads to decide
         which files a user's bug report or feature request is about.
@@ -148,11 +162,22 @@ public sealed class RepoMapService(
             await db.SaveChangesAsync(ct);
 
             var stale = sources.Where(f => !rows.TryGetValue(f.Path, out var r) || r.BlobSha != f.BlobSha).ToList();
-            var summarized = await SummarizeAsync(
-                app, repoKey, head.CommitSha, stale.Take(MaxSummariesPerRefresh).ToList(), rows, ct);
+            var thisPass = stale.Take(MaxSummariesPerRefresh).ToList();
+            if (thisPass.Count > 0)
+                logger.LogInformation(
+                    "Repository map of {Repo} at {Commit}: {Stale} of {Total} file(s) new or changed; summarizing {Pass} in this pass.",
+                    app.Repo, ShortSha(head.CommitSha), stale.Count, sources.Count, thisPass.Count);
+
+            var started = Stopwatch.GetTimestamp();
+            var summarized = await SummarizeAsync(app, repoKey, head.CommitSha, thisPass, rows, ct);
 
             state.IsComplete = summarized == stale.Count;
             await db.SaveChangesAsync(ct);
+
+            if (thisPass.Count > 0)
+                logger.LogInformation(
+                    "Repository map of {Repo}: {Summarized} file(s) summarized in {Seconds:0} s; {Left} left.",
+                    app.Repo, summarized, Stopwatch.GetElapsedTime(started).TotalSeconds, stale.Count - summarized);
 
             var embedded = await EmbedMissingAsync(app, repoKey, ct);
             return new RepoMapRefresh(UpToDate: false, state.IsComplete, summarized, gone.Count, embedded);
@@ -192,26 +217,33 @@ public sealed class RepoMapService(
         var batch = new List<(TreeFile File, string Text)>();
         var batchChars = 0;
 
-        foreach (var file in files)
+        // Fetched a few at a time rather than all up front: a pass that ends early on a model failure should not
+        // have read the rest of its files for nothing.
+        foreach (var chunk in files.Chunk(BlobFetchConcurrency))
         {
-            var text = await gitHub.GetBlobTextAsync(app, file.BlobSha, MaxCharsPerFile, ct);
-            if (text is null || string.IsNullOrWhiteSpace(text))
+            var texts = await Task.WhenAll(chunk.Select(f => gitHub.GetBlobTextAsync(app, f.BlobSha, MaxCharsPerFile, ct)));
+
+            for (var i = 0; i < chunk.Length; i++)
             {
-                // Binary or empty: nothing to summarize, and nothing to retry until the blob changes.
-                Upsert(repoKey, commitSha, file, "", rows);
-                done++;
-                continue;
+                var (file, text) = (chunk[i], texts[i]);
+                if (text is null || string.IsNullOrWhiteSpace(text))
+                {
+                    // Binary or empty: nothing to summarize, and nothing to retry until the blob changes.
+                    Upsert(repoKey, commitSha, file, "", rows);
+                    done++;
+                    continue;
+                }
+
+                batch.Add((file, text));
+                batchChars += text.Length;
+                if (batch.Count < MaxFilesPerBatch && batchChars < MaxCharsPerBatch) continue;
+
+                var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
+                if (flushed < 0) return done;
+                done += flushed;
+                batch.Clear();
+                batchChars = 0;
             }
-
-            batch.Add((file, text));
-            batchChars += text.Length;
-            if (batch.Count < MaxFilesPerBatch && batchChars < MaxCharsPerBatch) continue;
-
-            var flushed = await FlushAsync(app, repoKey, commitSha, batch, rows, ct);
-            if (flushed < 0) return done;
-            done += flushed;
-            batch.Clear();
-            batchChars = 0;
         }
 
         if (batch.Count > 0)
@@ -236,7 +268,8 @@ public sealed class RepoMapService(
         try
         {
             answer = await chat.CompleteAsync<SummariesDto>(
-                new ChatPrompt("repo_map_summaries", SystemPrompt, user.ToString()), ChatUrgency.Background, ct);
+                new ChatPrompt("repo_map_summaries", SystemPrompt, user.ToString(), ReasoningEffort: SummaryReasoningEffort),
+                ChatUrgency.Background, ct);
         }
         catch (OpenRouterException ex) when (ex.IsTransient || ex.Status is not null)
         {
@@ -265,8 +298,12 @@ public sealed class RepoMapService(
             Upsert(repoKey, commitSha, file, summaries.TryGetValue(file.Path, out var summary) ? Clean(summary) : "", rows);
 
         await db.SaveChangesAsync(ct);
+        logger.LogDebug("Summarized {Count} file(s) of {Repo}, {Missing} of them left without a summary by the model.",
+            batch.Count, app.Repo, batch.Count(b => !summaries.ContainsKey(b.File.Path)));
         return batch.Count;
     }
+
+    private static string ShortSha(string sha) => sha.Length > 7 ? sha[..7] : sha;
 
     private void Upsert(string repoKey, string commitSha, TreeFile file, string summary, Dictionary<string, RepoFile> rows)
     {
@@ -300,6 +337,9 @@ public sealed class RepoMapService(
             .Where(f => f.RepoKey == repoKey && f.Summary != "" && f.EmbeddingModel != model)
             .OrderBy(f => f.Path)
             .ToListAsync(ct);
+
+        if (missing.Count > 0)
+            logger.LogInformation("Embedding {Count} summaries of {Repo} with {Model}.", missing.Count, app.Repo, model);
 
         var embedded = 0;
         try

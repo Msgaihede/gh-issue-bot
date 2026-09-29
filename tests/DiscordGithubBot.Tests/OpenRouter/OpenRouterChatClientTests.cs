@@ -245,4 +245,14 @@ public class OpenRouterChatClientTests
         Assert.Null(body["provider"]);
         Assert.Null(body["reasoning"]);
     }
+
+    [Fact]
+    public async Task A_prompt_can_override_the_configured_reasoning_effort()
+    {
+        _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
+
+        await Client().CompleteAsync<Answer>(Prompt with { ReasoningEffort = "low" }, ChatUrgency.Background);
+
+        Assert.Equal("low", _http.Requests.Single().Body!["reasoning"]!["effort"]!.GetValue<string>());
+    }
 }

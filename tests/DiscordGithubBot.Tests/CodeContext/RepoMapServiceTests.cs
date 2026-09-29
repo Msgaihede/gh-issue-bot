@@ -376,4 +376,72 @@ public sealed class RepoMapServiceTests : IDisposable
 
         Assert.Equal(2, seen.Count);
     }
+
+    /// <summary>At the configured medium, a batch of one-line summaries took ~10 s — most of a first build.</summary>
+    [Fact]
+    public async Task Summaries_run_at_the_lower_summary_reasoning_effort()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var seen = new List<ChatPrompt>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+
+        Assert.Equal(RepoMapService.SummaryReasoningEffort, Assert.Single(seen).ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task Blobs_are_fetched_several_at_a_time_and_summarized_in_tree_order()
+    {
+        var files = Enumerable.Range(0, RepoMapService.BlobFetchConcurrency * 2)
+            .Select(i => File($"src/f{i:D2}.cs", $"s{i}")).ToArray();
+        Head("c1", files);
+        var inFlight = 0;
+        var maxInFlight = 0;
+        _gitHub.GetBlobTextAsync(App, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                lock (files) maxInFlight = Math.Max(maxInFlight, ++inFlight);
+                await Task.Delay(20);
+                lock (files) inFlight--;
+                return (string?)$"contents of {call.ArgAt<string>(1)}";
+            });
+        var seen = new List<ChatPrompt>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat(seen), _embeddings, Options, NullLogger<RepoMapService>.Instance).RefreshAsync(App);
+
+        Assert.Equal(RepoMapService.BlobFetchConcurrency, maxInFlight);
+        var order = seen.SelectMany(p => p.User.Split('\n').Where(l => l.StartsWith("=== ")).Select(l => l[4..^4]));
+        Assert.Equal(files.Select(f => f.Path), order);
+    }
+
+    /// <summary>A first build runs for many minutes; each pass says how far it got so it never looks hung.</summary>
+    [Fact]
+    public async Task Each_pass_logs_what_it_summarizes_and_what_is_left()
+    {
+        var files = Enumerable.Range(0, RepoMapService.MaxSummariesPerRefresh + 10)
+            .Select(i => File($"src/f{i:D4}.cs", $"s{i}")).ToArray();
+        Head("c1234567890", files);
+        var logger = new ListLogger<RepoMapService>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, logger).UpdateAsync(App);
+
+        var info = logger.Messages(Microsoft.Extensions.Logging.LogLevel.Information).ToList();
+        Assert.Contains(info, m => m.Contains("at c123456") && m.Contains($"{files.Length} of {files.Length} file(s) new or changed")
+                                   && m.Contains($"summarizing {RepoMapService.MaxSummariesPerRefresh} in this pass"));
+        Assert.Contains(info, m => m.Contains($"{RepoMapService.MaxSummariesPerRefresh} file(s) summarized") && m.Contains("; 10 left."));
+        Assert.Contains(info, m => m.Contains("10 file(s) summarized") && m.Contains("; 0 left."));
+    }
+
+    [Fact]
+    public async Task An_unchanged_map_logs_nothing()
+    {
+        Head("c1", File("src/a.cs", "s1"));
+        var sut = new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, NullLogger<RepoMapService>.Instance);
+        await sut.UpdateAsync(App);
+        var logger = new ListLogger<RepoMapService>();
+
+        await new RepoMapService(_db, _gitHub, new EchoChat([]), _embeddings, Options, logger).UpdateAsync(App);
+
+        Assert.Empty(logger.Entries);
+    }
 }
