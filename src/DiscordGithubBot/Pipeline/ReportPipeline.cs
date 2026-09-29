@@ -34,6 +34,16 @@ public sealed record ReportOutcome(
     ReportOutcomeKind Kind, Guid PendingReportId, IssueDraft Draft, ReportType Type, IReadOnlyList<string> Labels,
     CandidateIssue? Match, IReadOnlyList<CandidateIssue> Candidates);
 
+/// <summary>Everything the models decided about a report, before anything is stored or shown.</summary>
+/// <param name="OpenIssues">the open issues the duplicate finder compared the draft with</param>
+public sealed record ReportAnalysis(
+    ReportType Type, NormalizedReport Normalized, DraftReview Review, DuplicateVerdict Verdict,
+    IReadOnlyList<CachedIssue> OpenIssues)
+{
+    /// <summary>The draft as it would ship: the reviewed title over the normalized body.</summary>
+    public IssueDraft Draft => new(Review.Title, Normalized.Body);
+}
+
 /// <param name="Images">screenshots that made it to GitHub, in the order the reporter attached them;
 /// the channel announcement shows them as a media gallery</param>
 public sealed record CreatedIssueResult(
@@ -53,6 +63,10 @@ public interface IReportPipeline
 {
     /// <summary>Modal submit -> type -> normalized draft -> dedup verdict. Persists a PendingReport and returns the routed outcome.</summary>
     Task<ReportOutcome> ProcessAsync(ReportSubmission submission, CancellationToken ct = default);
+
+    /// <summary>The model work of <see cref="ProcessAsync"/> without storing anything; what <c>--dry-run</c> prints.</summary>
+    /// <exception cref="NormalizationException"/>
+    Task<ReportAnalysis> AnalyzeAsync(AppConfig app, string rawText, CancellationToken ct = default);
 
     /// <summary>Confirm-create: uploads images, adds code context, creates the GitHub issue, deletes the pending report.</summary>
     /// <exception cref="ExpiredPendingReportException"/>
@@ -94,42 +108,9 @@ public sealed class ReportPipeline(
     public async Task<ReportOutcome> ProcessAsync(ReportSubmission submission, CancellationToken ct = default)
     {
         var app = submission.App;
-
-        // The issue sync and the label listing are GitHub I/O, so they run alongside the model calls.
-        // Both swallow GitHub failures: dedup then runs against the cache as it stands, and the issue
-        // simply goes without labels.
-        var syncing = sync.SyncAsync(app, ct);
-        var listingLabels = ListLabelsQuietlyAsync(app, ct);
-
-        ReportType type;
-        NormalizedReport normalized;
-        try
-        {
-            type = await classifier.ClassifyAsync(app.Name, submission.RawText, ct);
-
-            // A failed normalization throws: a half-written issue is worse than none, so the Discord
-            // layer turns NormalizationException into an ephemeral error instead of drafting anything.
-            normalized = await normalizer.NormalizeAsync(type, app.Name, submission.RawText, ct);
-        }
-        finally
-        {
-            // Awaited on every path: the sync shares this scope's DbContext, which must not be disposed
-            // under it when normalization fails.
-            await syncing;
-        }
-
-        var openIssues = await sync.GetOpenIssuesAsync(app.Repo, ct);
-
-        // Independent decision calls over the same draft, so they run together. Dedup reads the draft
-        // with its first title: the body carries the substance, and waiting for the title choice would
-        // put a second round trip in front of the reporter for no gain.
-        var reviewing = reviewer.ReviewAsync(app, type, normalized, await listingLabels, ct);
-        var finding = duplicates.FindAsync(new IssueDraft(normalized.Titles[0], normalized.Body), openIssues, ct);
-        await Task.WhenAll(reviewing, finding);
-
-        var review = await reviewing;
-        var verdict = await finding;
-        var draft = new IssueDraft(review.Title, normalized.Body);
+        var analysis = await AnalyzeAsync(app, submission.RawText, ct);
+        var (type, _, review, verdict, openIssues) = analysis;
+        var draft = analysis.Draft;
 
         var byNumber = openIssues.ToDictionary(i => i.IssueNumber);
         var shortlist = verdict.Shortlist
@@ -167,6 +148,43 @@ public sealed class ReportPipeline(
             "Drafted a {Type} report for {Repo}: {Verdict} over {Open} open issue(s); AI cost ${Cost} in {Calls} call(s).",
             type, app.Repo, verdict.Kind, openIssues.Count, usage.TotalCost, usage.Calls);
         return Route(pending.Id, draft, type, review.Labels, verdict, shortlist);
+    }
+
+    public async Task<ReportAnalysis> AnalyzeAsync(AppConfig app, string rawText, CancellationToken ct = default)
+    {
+        // The issue sync and the label listing are GitHub I/O, so they run alongside the model calls.
+        // Both swallow GitHub failures: dedup then runs against the cache as it stands, and the issue
+        // simply goes without labels.
+        var syncing = sync.SyncAsync(app, ct);
+        var listingLabels = ListLabelsQuietlyAsync(app, ct);
+
+        ReportType type;
+        NormalizedReport normalized;
+        try
+        {
+            type = await classifier.ClassifyAsync(app.Name, rawText, ct);
+
+            // A failed normalization throws: a half-written issue is worse than none, so the Discord
+            // layer turns NormalizationException into an ephemeral error instead of drafting anything.
+            normalized = await normalizer.NormalizeAsync(type, app.Name, rawText, ct);
+        }
+        finally
+        {
+            // Awaited on every path: the sync shares this scope's DbContext, which must not be disposed
+            // under it when normalization fails.
+            await syncing;
+        }
+
+        var openIssues = await sync.GetOpenIssuesAsync(app.Repo, ct);
+
+        // Independent decision calls over the same draft, so they run together. Dedup reads the draft
+        // with its first title: the body carries the substance, and waiting for the title choice would
+        // put a second round trip in front of the reporter for no gain.
+        var reviewing = reviewer.ReviewAsync(app, type, normalized, await listingLabels, ct);
+        var finding = duplicates.FindAsync(new IssueDraft(normalized.Titles[0], normalized.Body), openIssues, ct);
+        await Task.WhenAll(reviewing, finding);
+
+        return new ReportAnalysis(type, normalized, await reviewing, await finding, openIssues);
     }
 
     public async Task<CreatedIssueResult> CreateIssueAsync(Guid pendingReportId, CancellationToken ct = default)

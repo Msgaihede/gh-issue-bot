@@ -1296,3 +1296,19 @@ below record the choices inside it that are not obvious from the code.
     a public tracker would publish private code. Mapping only `Repo` keeps
     the notes exactly as visible as the code they describe. Supporting a
     separate code repository would need a visibility check first.
+
+91. **`--dry-run owner/repo "text"` runs one report through every model
+    call and prints the result instead of storing or posting it.** The
+    Decisions skill's rule is "probe before you trust": thresholds come from
+    raw probabilities on representative inputs, not from defaults. No
+    OpenRouter key was available while this was built, so every gate in the
+    bot (type, title, labels at 0.5, dedup at 0.5/0.2, shortlist floors at
+    0.05) is a pre-probe default. The dry run refreshes the app's repository
+    map, runs `ReportPipeline.AnalyzeAsync` (the model half of
+    `ProcessAsync`, split out for this) and the code-context builder, and
+    prints type, all titles with the chosen one marked, labels, the dedup
+    verdict with its shortlist, the body, the code block and the AI cost —
+    with Debug logging switched on for the bot's own categories, so every
+    decision's raw answers appear above the summary. It does update the
+    issue cache and the map, which are caches; it never stores a pending
+    report or touches Discord or GitHub issues.

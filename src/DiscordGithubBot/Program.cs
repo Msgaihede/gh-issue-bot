@@ -1,10 +1,15 @@
 using DiscordGithubBot;
+using DiscordGithubBot.Ai;
+using DiscordGithubBot.CodeContext;
 using DiscordGithubBot.Configuration;
 using DiscordGithubBot.Data;
 using DiscordGithubBot.GitHub;
+using DiscordGithubBot.OpenRouter;
+using DiscordGithubBot.Pipeline;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -32,6 +37,15 @@ if (!string.IsNullOrEmpty(dbDirectory)) Directory.CreateDirectory(dbDirectory);
 
 builder.Services.AddBotServices(options);
 
+// A dry run is for tuning: the decision client logs every raw answer at Debug, and the HTTP client's
+// per-request lines and EF's SQL would bury them.
+if (args is ["--dry-run", ..])
+{
+    builder.Logging.AddFilter("DiscordGithubBot", LogLevel.Debug);
+    builder.Logging.AddFilter("System.Net.Http", LogLevel.Warning);
+    builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
+}
+
 using var host = builder.Build();
 
 // The bot ships no migrations: it owns its SQLite file, and a schema from another build is rebuilt.
@@ -58,6 +72,41 @@ if (args is ["--smoke-upload", var repo])
     var result = await uploader.UploadAsync(app, "smoke-test.png", "image/png", png);
     Console.WriteLine(result is null ? "SMOKE FAILED: both tiers failed" : $"SMOKE OK: {result.Url}");
     return result is null ? 1 : 0;
+}
+
+// one report through every model call, printed instead of saved or posted:
+// dotnet run -- --dry-run owner/repo "the report text"
+if (args is ["--dry-run", var dryRepo, var reportText])
+{
+    var app = options.AppByRepo(dryRepo);
+    if (app is null) { Console.Error.WriteLine($"No configured app for repo '{dryRepo}'."); return 1; }
+    Console.WriteLine($"Dry run for {app.Repo}: no report is stored and nothing is posted to Discord or GitHub.");
+
+    await using var scope = host.Services.CreateAsyncScope();
+    var services = scope.ServiceProvider;
+    var usage = services.GetRequiredService<AiUsageMeter>();
+
+    // Code context needs a map; building one is incremental, so after the first run this is two GitHub calls.
+    var map = await services.GetRequiredService<IRepoMapService>().RefreshAsync(app);
+    var (mapCost, mapCalls) = (usage.TotalCost, usage.Calls);
+    Console.WriteLine(map.UpToDate
+        ? "Repository map: up to date."
+        : $"Repository map: {map.Summarized} file(s) summarized for ${mapCost} in {mapCalls} call(s); " +
+          (map.Complete ? "complete." : "still incomplete, so code context may be thin."));
+
+    try
+    {
+        var analysis = await services.GetRequiredService<IReportPipeline>().AnalyzeAsync(app, reportText);
+        var codeContext = await services.GetRequiredService<ICodeContextBuilder>().BuildAsync(app, analysis.Draft);
+        Console.WriteLine();
+        Console.WriteLine(DryRun.Format(analysis, codeContext, usage.TotalCost - mapCost, usage.Calls - mapCalls));
+        return 0;
+    }
+    catch (NormalizationException ex)
+    {
+        Console.Error.WriteLine($"DRY RUN FAILED: {ex.Message} {ex.InnerException?.Message}");
+        return 1;
+    }
 }
 
 await host.RunAsync();
