@@ -197,8 +197,14 @@ starts from the right place:
 ## Slash commands
 
 - **`/issue`** — opens the report modal described above.
-- **`/issue-install`** — an ephemeral message with an **Add to my account**
-  button: the Discord link that installs the bot on the caller's own account.
+- **`/issue-install [public]`** — an ephemeral message with an **Add to my
+  account** button: the Discord link that installs the bot on the caller's own
+  account. With `public: True` the link is for everyone in the channel: where
+  the bot itself may post, it sends a plain channel message and leaves no
+  interaction reply at all (no "used /issue-install" header, nothing for the
+  caller to clean up); where it can't — a user install in a server the bot
+  isn't in, a group DM, a channel it may not write to — it falls back to a
+  public reply.
 - **`/list-issues [app]`** — an ephemeral list of the target repo's open issue
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
@@ -653,6 +659,9 @@ configured app. Enable **User Install** in the Developer Portal first.
    in (a dropdown when that is several). The created issue's footer reads
    "via Discord". From an account in none of the configured servers,
    `/issue` answers that you're not in any of them instead of opening.
+   `/issue-install public:True` in a bot server's channel posts the link as a
+   plain bot message with no reply above it; in a server without the bot it
+   comes as a public reply instead.
 8. **Rate limit.** With `Limits__ReportsPerUserPerDay=1`, a second `/issue`
    within a day answers with the time you can report again instead of a modal.
 9. **`/list-issues`.** The ephemeral list shows the repository's open issues

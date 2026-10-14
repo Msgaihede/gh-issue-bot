@@ -76,7 +76,9 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   of the configured servers they are in, checked over REST
   (`IGuildMembership`) — the bot has only the `Guilds` intent, so its member
   cache is never trusted for this.
-- All interaction replies are ephemeral; only issue creations post publicly.
+- All interaction replies are ephemeral; only issue creations post publicly,
+  plus `/issue-install public:True`, which posts a plain channel message and
+  deletes its own deferred reply (decision 107).
 - A button/select handler answers through `AnswerClickAsync` (→
   `ClickedMessage.ReplaceAsync`), which edits the "Working on it…" note the
   click left — never `FollowupAsync`, which posts a second message beside it.

@@ -69,11 +69,16 @@ public class InteractionRoutingTests
     }
 
     [Fact]
-    public async Task The_install_command_takes_no_options()
+    public async Task The_install_command_is_private_unless_asked_to_be_public()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue-install").Parameters);
+        var install = module.SlashCommands.Single(c => c.Name == "issue-install");
+        var parameter = Assert.Single(install.Parameters);
+        Assert.Equal("public", parameter.Name);
+        Assert.Equal(typeof(bool), parameter.ParameterType);
+        Assert.False(parameter.IsRequired);
+        Assert.Equal(false, parameter.DefaultValue);
     }
 
     [Fact]

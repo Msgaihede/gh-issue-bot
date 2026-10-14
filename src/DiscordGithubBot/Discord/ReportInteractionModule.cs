@@ -67,12 +67,52 @@ public class ReportInteractionModule(
     /// <summary>
     /// Hands out the link that adds the bot to the caller's own Discord account, after which <c>/issue</c>
     /// works in any server, DM or group DM — not only in the servers the bot was added to.
+    /// <para>
+    /// With <c>public</c> the link is for everyone in the channel. Where the bot itself may post, it posts a
+    /// plain channel message and answers the interaction with nothing at all, so no "used /issue-install"
+    /// header hangs over the link. Anywhere else (a user install in a server the bot is not in, a group DM,
+    /// a channel it may not write to) a public reply is the only way left to show it.
+    /// </para>
     /// </summary>
     [SlashCommand("issue-install", "Get a link to add this bot to your own Discord account", runMode: RunMode.Sync)]
-    public Task IssueInstall() =>
-        RespondAsync(
-            components: OutcomeRenderer.RenderInstallLink(InstallLinks.UserInstall(Context.Interaction.ApplicationId)),
-            ephemeral: true);
+    public async Task IssueInstall(
+        [Summary("public", "Post the link in this channel for everyone, not only for you")] bool isPublic = false)
+    {
+        var card = OutcomeRenderer.RenderInstallLink(InstallLinks.UserInstall(Context.Interaction.ApplicationId));
+
+        if (!isPublic || PostableChannel() is not { } channel)
+        {
+            await RespondAsync(components: card, ephemeral: !isPublic);
+            return;
+        }
+
+        // Acknowledged first — the three-second deadline — then the deferred "thinking" note is deleted
+        // once the channel message is out, which leaves the bot's message as the only trace.
+        await DeferAsync(ephemeral: true);
+
+        try
+        {
+            await channel.SendMessageAsync(components: card, flags: MessageFlags.ComponentsV2);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not post the install link in channel {ChannelId}.", channel.Id);
+            await FollowupAsync(
+                "I couldn't post the link in this channel. Run `/issue-install` without `public` to get it for yourself.",
+                ephemeral: true);
+            return;
+        }
+
+        try
+        {
+            await DeleteOriginalResponseAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not delete the deferred /issue-install response.");
+            await FollowupAsync("Posted the link in this channel.", ephemeral: true);
+        }
+    }
 
     [SlashCommand("list-issues", "List open GitHub issues", runMode: RunMode.Sync)]
     public async Task ListIssues([Summary(description: AppOptionDescription)] string? app = null)
@@ -292,6 +332,28 @@ public class ReportInteractionModule(
         await RespondWithModalAsync<ReportModal>(
             $"report-modal|{ReportModal.PickAppToken}",
             modifyModal: modal => modal.Components.Insert(0, ReportModal.BuildAppPicker(choices!)));
+    }
+
+    /// <summary>
+    /// The channel the command came from, when the bot itself may post there; otherwise null. Read from
+    /// the gateway cache only — <c>/issue-install</c> has three seconds — and the cache knows every server
+    /// the bot is in (the <c>Guilds</c> intent), which is exactly the question. A thread's permissions are
+    /// its parent's, with "send in threads" in place of "send".
+    /// </summary>
+    private IMessageChannel? PostableChannel()
+    {
+        if (Context.Interaction.GuildId is not { } guildId || Context.Interaction.ChannelId is not { } channelId)
+            return null;
+        if (client.GetGuild(guildId) is not { CurrentUser: { } self } guild) return null;
+
+        var channel = guild.GetChannel(channelId);
+        var thread = channel as SocketThreadChannel;
+        if (channel is not IMessageChannel messageChannel || (thread?.ParentChannel ?? channel) is not { } source)
+            return null;
+
+        var permissions = self.GetPermissions(source);
+        var canSend = thread is null ? permissions.SendMessages : permissions.SendMessagesInThreads;
+        return permissions.ViewChannel && canSend ? messageChannel : null;
     }
 
     private Task<AppAccessResult> AppsHereAsync() => appAccess.ForAsync(Context.Interaction.GuildId, Context.User.Id);
