@@ -41,7 +41,8 @@ they are most likely about. Every model call goes through
   the whole repository map: ≈ $0.005 per report,
   so 1000 reports a month stay under $5 (see [APP.md](APP.md#cost)).
 - **Human in the loop** — nothing reaches GitHub without an explicit click;
-  every interaction stays ephemeral until an issue is created.
+  every interaction stays ephemeral until an issue is created (or you
+  share the install link with `/issue-install public:True`).
 - **Smart duplicate comments** — confirming a duplicate posts only what the new
   report adds.
 - **Screenshots that survive** — image bytes are downloaded at submit time
@@ -74,7 +75,7 @@ flowchart TD
 | Command | What it does |
 | --- | --- |
 | `/issue` | Report a bug or request a feature → deduplicated, labelled issue |
-| `/issue-install` | Link to add the bot to your own Discord account |
+| `/issue-install [public]` | Link to add the bot to your own Discord account (`public` posts it for the whole channel) |
 | `/list-issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
 
 ## Getting started

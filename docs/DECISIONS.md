@@ -1674,3 +1674,20 @@ below record the choices inside it that are not obvious from the code.
      Four runs per level is a small sample; revisit if drafts start
      skipping template sections. The repository map's summaries were
      already pinned at `low` and stay so if the setting is raised.
+
+## 2026-10-14 (public install link)
+
+109. **`/issue-install public:True` posts a channel message, not a reply.**
+     The owner wanted the install link shareable, and wanted the result to be
+     the bot's message alone — a public interaction reply always carries
+     Discord's "X used /issue-install" header, which the caller cannot remove.
+     So where the bot may post (it is in the server — the `Guilds`-intent
+     cache answers that within the three seconds — and has View Channel plus
+     Send Messages, or Send Messages in Threads for a thread, read from the
+     parent), the command defers ephemerally, sends the card with
+     `SendMessageAsync` and deletes the deferred response, so nothing else is
+     left. Where it may not (user install in a server without the bot, group
+     DMs, read-only channels) a plain public reply is the fallback: the
+     header is the price of reaching the channel at all. A send that fails
+     despite the cache saying yes tells the caller ephemerally. The option is
+     `public`, off by default, so the old private behaviour is unchanged.
