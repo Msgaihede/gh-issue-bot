@@ -1620,3 +1620,57 @@ below record the choices inside it that are not obvious from the code.
      prints every asked label with its P, the attached ones marked and the
      type label named, because the raw Debug answers only know labels by
      index.
+
+## 2026-10-14 (Claude Haiku 5.5)
+
+107. **Chat moves from GPT-6 Luna to `anthropic/claude-haiku-5.5`, and the
+     flex machinery goes with it.** At the owner's request. Haiku 5.5 costs
+     what Luna's regular tier did ($0.10 / $0.50 per million tokens) and
+     OpenRouter's Anthropic, Google Vertex and Azure hosts serve it with
+     strict structured output and `reasoning_effort`; Bedrock and Claude on
+     AWS serve it without structured output, and `require_parameters` keeps
+     them out. Anthropic has no flex tier, so the `openai/flex`-first order
+     (decision 77) and the draft's regular-tier shortcut (decision 98's
+     `ChatTier`) had nothing left to choose between: keeping them as
+     configuration was weighed against removing them, and the owner chose
+     removal. `ChatTier` and `RegularProviders` are gone; `ChatProviders`
+     (default `anthropic`, `google-vertex`) is the one order, and the retry
+     after a missed deadline or a transient failure reuses it rotated, next
+     host first, since a host that just stalled is the worst place to try
+     again. A leftover `RegularProviders` setting prints a startup warning
+     rather than failing. Losing flex roughly doubles background chat
+     (search terms, code notes, the repository map): ≈ $0.005 a report
+     instead of ≈ $0.0036, and a first map of ~1,550 files ≈ $0.38 instead
+     of $0.19. Reasoning effort was left at `medium`, as chosen for Luna
+     (decision 99), until it could be compared on Haiku (decision 108).
+     The model id is pinned, not `~anthropic/claude-haiku-latest`, for the
+     same reason decision models are: prompts were checked against one
+     build. One `--dry-run` on mtg-grimoire (an apostrophe search bug)
+     confirmed the whole path: every call answered via Anthropic, the draft
+     followed the bug template, Jev's title/labels/dedup were sensible, and
+     the code notes found the query lexer and the documented apostrophe
+     rule. Measured: the draft took 7.1 s ($0.00045) — slower than Luna's
+     ~4.0 s on the regular tier, worth watching; the report's chat cost
+     $0.0053; a first map of 2,000 files cost $0.62 (more than the $0.38
+     scaled from Luna, since the map is now capped at 2,000 files and
+     Haiku's tokens differ).
+
+108. **Haiku 5.5 runs at reasoning effort `low`.** Amends decision 99 for the
+     new model. Compared with `--dry-run` on mtg-grimoire, alternating
+     `medium` and `low` on one database: the apostrophe bug report three
+     times at each level and a deck-export feature request once. Drafts
+     averaged ~4.8 s at `medium` (7.1, 4.8, 2.5 s — it sometimes reasons
+     at length, 793 output tokens against ~330) and ~3.1 s at `low` (3.6,
+     2.3, 3.3 s); the feature draft took 2.7 s against 1.7 s. Code notes
+     took 9.2–9.5 s at `medium` and 4.4–5.6 s at `low`. Read side by side,
+     titles, labels, dedup and the picked files were the same; `medium`
+     once added the "search without the apostrophe" reproduction step and
+     noticed in the docs that the bug had been fixed before (a likely
+     regression), while `low` found one more relevant file in each code
+     note and once wrote "Urza s Saga" for the apostrophe-free search.
+     Neither level invented anything. The owner chose `low` everywhere
+     rather than only for the draft: the reporter waits on the draft, and
+     faster code notes reach the issue before a quick click more often.
+     Four runs per level is a small sample; revisit if drafts start
+     skipping template sections. The repository map's summaries were
+     already pinned at `low` and stay so if the setting is raised.

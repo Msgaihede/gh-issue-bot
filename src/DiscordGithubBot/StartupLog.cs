@@ -18,7 +18,7 @@ public static class StartupLog
             "Models: chat {ChatModel} (reasoning {Effort}), decisions {DecisionModel}, embeddings {EmbeddingModel}; chat providers [{Providers}], retries on [{RetryProviders}].",
             o.ChatModel, string.IsNullOrWhiteSpace(o.ReasoningEffort) ? "model default" : o.ReasoningEffort.Trim(),
             o.DecisionModel, o.EmbeddingModel,
-            string.Join(", ", o.EffectiveChatProviders), string.Join(", ", o.EffectiveRegularProviders));
+            string.Join(", ", o.EffectiveChatProviders), string.Join(", ", o.EffectiveRetryProviders));
 
         logger.LogInformation(
             "Database {Path} (schema v{Version}); each user may file {Limit} report(s) a day.",

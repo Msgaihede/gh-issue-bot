@@ -27,8 +27,8 @@ public class OpenRouterChatClientTests
     private static string Completion(object answer, string finishReason = "stop", decimal cost = 0.0004m) =>
         JsonSerializer.Serialize(new
         {
-            model = "openai/gpt-6-luna-20260922",
-            provider = "OpenAI",
+            model = "anthropic/claude-haiku-5.5",
+            provider = "Anthropic",
             choices = new[]
             {
                 new { finish_reason = finishReason, message = new { content = JsonSerializer.Serialize(answer, StructuredOutput.JsonOptions) } },
@@ -49,20 +49,20 @@ public class OpenRouterChatClientTests
         Assert.EndsWith("/api/v1/chat/completions", _http.Requests.Single().Url);
     }
 
-    /// <summary>Flex first, regular second: the half-price tier is the default, not an opt-in.</summary>
+    /// <summary>Anthropic first, Vertex behind it, never a host that would ignore the schema.</summary>
     [Fact]
-    public async Task Requests_flex_first_with_fallbacks_a_strict_schema_and_medium_reasoning()
+    public async Task Requests_haiku_on_anthropic_first_with_fallbacks_a_strict_schema_and_low_reasoning()
     {
         _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
         await Client().CompleteAsync<Answer>(Prompt, ChatUrgency.Interactive);
 
         var body = _http.Requests.Single().Body!;
-        Assert.Equal("openai/gpt-6-luna", body["model"]!.GetValue<string>());
-        Assert.Equal(["openai/flex", "openai"], body["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal("anthropic/claude-haiku-5.5", body["model"]!.GetValue<string>());
+        Assert.Equal(["anthropic", "google-vertex"], body["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.True(body["provider"]!["allow_fallbacks"]!.GetValue<bool>());
         Assert.True(body["provider"]!["require_parameters"]!.GetValue<bool>());
-        Assert.Equal("medium", body["reasoning"]!["effort"]!.GetValue<string>());
+        Assert.Equal("low", body["reasoning"]!["effort"]!.GetValue<string>());
 
         var format = body["response_format"]!["json_schema"]!;
         Assert.Equal("test_answer", format["name"]!.GetValue<string>());
@@ -75,11 +75,11 @@ public class OpenRouterChatClientTests
     }
 
     /// <summary>
-    /// The case decision 71 reverted flex over: a request queued on flex while a reporter waits. Past the
-    /// deadline the call goes again on the regular tier instead of waiting out the queue.
+    /// A host that accepted the request and stalls while a reporter waits: past the deadline the call goes
+    /// again with the next host first instead of waiting on the same one.
     /// </summary>
     [Fact]
-    public async Task An_interactive_call_that_misses_its_deadline_is_retried_on_the_regular_tier()
+    public async Task An_interactive_call_that_misses_its_deadline_is_retried_with_the_next_host_first()
     {
         _http.ThenHang().Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
@@ -87,19 +87,7 @@ public class OpenRouterChatClientTests
 
         Assert.Equal("t", answer.Title);
         Assert.Equal(2, _http.Requests.Count);
-        Assert.Equal(["openai"], _http.Requests[1].Body!["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
-    }
-
-    /// <summary>A regular-tier call never touches flex, first attempt or retry.</summary>
-    [Fact]
-    public async Task A_regular_tier_call_goes_straight_to_the_regular_providers()
-    {
-        _http.Then(HttpStatusCode.TooManyRequests, "{}").Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
-
-        await Client().CompleteAsync<Answer>(Prompt with { Tier = ChatTier.Regular }, ChatUrgency.Interactive);
-
-        Assert.All(_http.Requests, r =>
-            Assert.Equal(["openai"], r.Body!["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>())));
+        Assert.Equal(["google-vertex", "anthropic"], _http.Requests[1].Body!["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
     }
 
     [Theory]
@@ -107,7 +95,7 @@ public class OpenRouterChatClientTests
     [InlineData(HttpStatusCode.BadGateway)]
     public async Task A_transient_error_is_retried_once(HttpStatusCode status)
     {
-        _http.Then(status, """{"error":{"code":429,"message":"flex capacity"}}""")
+        _http.Then(status, """{"error":{"code":429,"message":"overloaded"}}""")
             .Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
         await Client().CompleteAsync<Answer>(Prompt, ChatUrgency.Background);
@@ -155,7 +143,7 @@ public class OpenRouterChatClientTests
     }
 
     /// <summary>
-    /// With the account's own OpenAI key behind OpenRouter, "cost" is only OpenRouter's fee (0 here) and OpenAI
+    /// With the account's own provider key behind OpenRouter, "cost" is only OpenRouter's fee (0 here) and the provider
     /// bills the inference directly; the meter must count what was really spent, or every log reads $0.
     /// </summary>
     [Fact]
@@ -251,8 +239,8 @@ public class OpenRouterChatClientTests
     {
         _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
-        await Client().CompleteAsync<Answer>(Prompt with { ReasoningEffort = "low" }, ChatUrgency.Background);
+        await Client().CompleteAsync<Answer>(Prompt with { ReasoningEffort = "high" }, ChatUrgency.Background);
 
-        Assert.Equal("low", _http.Requests.Single().Body!["reasoning"]!["effort"]!.GetValue<string>());
+        Assert.Equal("high", _http.Requests.Single().Body!["reasoning"]!["effort"]!.GetValue<string>());
     }
 }

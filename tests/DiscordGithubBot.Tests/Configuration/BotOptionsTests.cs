@@ -77,15 +77,15 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void The_reasoning_effort_defaults_to_medium_and_is_set_by_its_env_var()
+    public void The_reasoning_effort_defaults_to_low_and_is_set_by_its_env_var()
     {
-        Assert.Equal("medium", new OpenRouterOptions().ReasoningEffort);
+        Assert.Equal("low", new OpenRouterOptions().ReasoningEffort);
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["OpenRouter:ReasoningEffort"] = "low",
+            ["OpenRouter:ReasoningEffort"] = "medium",
         }).Build();
-        Assert.Equal("low", config.Get<BotOptions>()!.OpenRouter.ReasoningEffort);
+        Assert.Equal("medium", config.Get<BotOptions>()!.OpenRouter.ReasoningEffort);
     }
 
     [Fact]
@@ -96,17 +96,25 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void The_defaults_are_gpt6_luna_on_flex_first_and_a_pinned_jev()
+    public void The_defaults_are_haiku_on_anthropic_then_vertex_and_a_pinned_jev()
     {
         var o = new OpenRouterOptions();
-        Assert.Equal("openai/gpt-6-luna", o.ChatModel);
+        Assert.Equal("anthropic/claude-haiku-5.5", o.ChatModel);
         Assert.Equal("typesafe/jev-1.13", o.DecisionModel);
-        Assert.Equal(["openai/flex", "openai"], o.EffectiveChatProviders);
-        Assert.Equal(["openai"], o.EffectiveRegularProviders);
+        Assert.Equal(["anthropic", "google-vertex"], o.EffectiveChatProviders);
+        Assert.Equal(["google-vertex", "anthropic"], o.EffectiveRetryProviders);
+    }
+
+    [Fact]
+    public void A_retry_rotates_the_configured_hosts_and_leaves_one_or_none_alone()
+    {
+        Assert.Equal(["b", "c", "a"], new OpenRouterOptions { ChatProviders = ["a", "b", "c"] }.EffectiveRetryProviders);
+        Assert.Equal(["a"], new OpenRouterOptions { ChatProviders = ["a"] }.EffectiveRetryProviders);
+        Assert.Empty(new OpenRouterOptions { ChatProviders = [] }.EffectiveRetryProviders);
     }
 
     /// <summary>
-    /// The binder appends to an initialised list; the provider lists are nullable so a configured order
+    /// The binder appends to an initialised list; the provider list is nullable so a configured order
     /// replaces the default instead of being tacked on behind it.
     /// </summary>
     [Fact]
@@ -434,6 +442,6 @@ public class BotOptionsTests
         var o = config.Get<BotOptions>()!;
         Assert.Empty(o.Validate());
         Assert.Equal(111111111111111111UL, o.Apps[0].GuildIds[0]);
-        Assert.Equal("openai/gpt-6-luna", o.OpenRouter.ChatModel); // default survives binding
+        Assert.Equal("anthropic/claude-haiku-5.5", o.OpenRouter.ChatModel); // default survives binding
     }
 }

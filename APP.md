@@ -6,7 +6,7 @@ ever needing a GitHub account. It turns a short Discord message into a
 well-written, deduplicated, labelled GitHub issue (or a comment on an existing
 one) that names the code and docs it is about. Every model call goes through
 [OpenRouter](https://openrouter.ai/): TypeSafe's **Jev** decision model makes
-every judgment, **GPT-6 Luna** writes every piece of text, and a human always
+every judgment, Anthropic's **Claude Haiku 5.5** writes every piece of text, and a human always
 confirms before anything is written to GitHub. For the design see
 `docs/superpowers/specs/2026-09-29-openrouter-jev-redesign.md` (and the
 original `docs/superpowers/specs/2026-08-18-discord-github-issue-bot-design.md`);
@@ -47,7 +47,7 @@ publicly in the app's configured channel(s).
    different)? It picks the draft template and the type label. If the call
    fails, the report is treated as a bug; the preview shows the type either
    way.
-4. **Draft (GPT-6 Luna).** The raw text becomes a structured body following a
+4. **Draft (Haiku 5.5).** The raw text becomes a structured body following a
    bug template (Description / Steps to Reproduce / Expected / Actual) or a
    feature template (Summary / Motivation / Proposed Solution), translated
    into English if needed, plus **three alternative titles**. The prompt holds
@@ -101,7 +101,7 @@ publicly in the app's configured channel(s).
    issue gets the chosen labels, the reporter gets an ephemeral confirmation,
    and then a public announcement posts in the app's channel(s). On
    comment: screenshots upload the same way, and the comment carries only
-   what the report adds to the issue (GPT-6 Luna compares the draft with the
+   what the report adds to the issue (Haiku compares the draft with the
    cached issue text) above an `_Also reported by …_` footer — or that footer
    alone when it adds nothing, or the full draft if the comparison fails.
    Nothing posts publicly on the comment path. A screenshot that cannot be
@@ -126,7 +126,7 @@ starts from the right place:
 - **Repository map.** A background worker keeps, per app, one line per source
   file and Markdown doc (`.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`) on the
   default branch: what the file is responsible for, or what the doc explains,
-  written by GPT-6 Luna on the flex tier. Dependencies, build output,
+  written by Haiku 5.5. Dependencies, build output,
   generated or minified code, assets, lock files, `.github/`, licences and
   codes of conduct are left out, as is anything over 200 KB; a repository with
   more than 2000 such files keeps the shallowest 2000. The worker checks
@@ -155,8 +155,8 @@ starts from the right place:
 - **While the reporter reads the preview.** The code context is for
   maintainers, so neither the preview nor the click waits for it: it starts
   in the background as soon as the preview is shown and is saved with the
-  draft (measured: the preview in ~5 s, the code context ~20–25 s later on
-  flex). A reporter who clicks "Create issue" after that gets the block in
+  draft (measured with GPT-6 Luna, before the switch to Haiku: the preview
+  in ~5 s, the code context ~20–25 s later). A reporter who clicks "Create issue" after that gets the block in
   the issue straight away; one who clicks sooner gets the issue at once and
   the block ~20 s later, as an edit of the issue body that re-reads the issue
   and replaces only what follows the hidden marker (so a quick edit to the
@@ -166,14 +166,14 @@ starts from the right place:
   for every draft, duplicates and cancelled ones included (~$0.002 each).
   Reporters rarely use the code's vocabulary ("nothing comes up" rather than
   `fts_query`), so finding the files is two-sided:
-  1. GPT-6 Luna writes the search terms a developer would use, looking at the
+  1. Haiku writes the search terms a developer would use, looking at the
      repository's file tree so the terms match the names this codebase uses;
   2. keyword search (BM25 over path + summary) and embedding search each rank
      the files, and the two rankings are fused; code and docs are ranked
      apart, and the top 40 code files and top 10 docs go on;
   3. Jev picks up to four code files and two docs from those candidates;
-  4. the bot reads them at the exact version the map summarized, and GPT-6
-     Luna says which are really involved and how, naming functions or
+  4. the bot reads them at the exact version the map summarized, and Haiku
+     says which are really involved and how, naming functions or
      documented behaviour, plus a short note on where a fix would likely go.
 
   Measured on mtg-grimoire's history (decision 95), this finds a file the fix
@@ -253,30 +253,28 @@ lives in memory, so a restart resets it.
 | Model | Via | Used for |
 | --- | --- | --- |
 | `typesafe/jev-1.13` | OpenRouter Decisions API | type, title choice, labels, duplicate shortlist + verification, file and doc selection |
-| `openai/gpt-6-luna` | OpenRouter chat completions | the draft, repository-map summaries, search terms, code notes, duplicate comments |
+| `anthropic/claude-haiku-5.5` | OpenRouter chat completions | the draft, repository-map summaries, search terms, code notes, duplicate comments |
 | `voyageai/voyage-4` | OpenRouter embeddings | repository-map summaries and each new issue, for finding its files by meaning |
 
-**Flex first — except the draft.** Chat calls send `provider.order =
-["openai/flex", "openai"]` (`ChatProviders`): OpenAI's half-price flex tier
-first, the regular tier behind it, and OpenRouter itself moves on when flex
-rejects a request. Flex can also queue, so a call a reporter is waiting on has
-`ChatDeadlineSeconds` (30) on the first attempt; past that, or after any
-transient failure, it is retried once on `RegularProviders` (`["openai"]`,
-the regular tier). The **draft** goes to `RegularProviders` directly: the
-reporter waits on it before seeing anything, and flex more than doubled it
-(7.2 s against 3.2 s measured), for a saving of about $0.0002 a report.
-Search terms, code notes, duplicate comments and the repository map stay on
-flex; background work waits out the queue.
+**Routing.** Chat calls send `provider.order = ["anthropic",
+"google-vertex"]` (`ChatProviders`) with `require_parameters`, so OpenRouter
+only uses hosts that honour the strict JSON schema (Bedrock serves Haiku
+without structured output and is skipped) and moves on by itself when a host
+rejects a request. A host can also accept a request and stall, so a call a
+reporter is waiting on has `ChatDeadlineSeconds` (30) on the first attempt;
+past that, or after any transient failure, it is retried once with the same
+hosts rotated, next host first (`["google-vertex", "anthropic"]`). Background
+work (the repository map) gets a 10-minute deadline instead. Anthropic has no
+discounted flex tier, so there is no cheaper tier to route to (decision 107).
 
-**Reasoning effort** is `medium` for every GPT-6 Luna call except the
-repository map's one-line summaries (always `low`), set by
+**Reasoning effort** is `low` for every chat call, set by
 `OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
-model's own default; anything else fails startup. Read side by side on real
-reports, `low` and `medium` wrote equally good drafts and code notes (`medium`
-fills in reproduction steps a little more often; drafts ~4.0 s against
-~3.3 s on the regular tier), while `none` skipped bug-template sections and
-failed one code-notes call in four.
+model's own default; anything else fails startup. The repository map's
+one-line summaries stay at `low` even when it is raised. Compared on Haiku 5.5
+with `--dry-run` (decision 108): `low` drafted a bug report in ~3.1 s against
+~4.8 s at `medium` (and far less erratically), wrote code notes in ~5 s
+against ~9.4 s, and read as well as `medium` side by side.
 
 **Pinned models.** `DecisionModel` must be a versioned id — startup rejects a
 `~…-latest` alias, because every decision threshold belongs to one build.
@@ -284,40 +282,45 @@ When changing models, re-check the thresholds with `--dry-run`.
 
 ### Cost
 
-Prices from OpenRouter's catalog on 2026-09-29: GPT-6 Luna flex $0.05 per
-million input tokens / $0.25 per million output (regular 2×), Jev 1.13 $0.042
-per million input tokens with free output.
+Prices from OpenRouter's catalog: Claude Haiku 5.5 $0.10 per million input
+tokens / $0.50 per million output (2026-10-14; no flex tier), Jev 1.13 $0.042
+per million input tokens with free output (2026-09-29). The chat figures below
+were measured on GPT-6 Luna, which has the same regular price, and scaled to
+it; Haiku's tokenizer and reasoning differ, so re-measure from the usage logs.
 
 | Per report (typical) | Cost |
 | --- | --- |
 | Jev: type | $0.00006 |
-| Luna: draft (reasoning medium) | $0.0005 |
+| Haiku: draft (reasoning low) | $0.0003 |
 | Jev: title + type label + 40 labels | $0.0003 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
-| Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | $0.0020 |
-| **Total** | **≈ $0.0036** |
+| Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | ≈ $0.0034 |
+| **Total** | **≈ $0.005** |
 
-1000 reports a month come to about **$3.60** on flex, about $5 if every chat
-call fell back to the regular tier, and code context no longer grows with the
-size of the repository. Keeping the repository map current adds cents (a
-first build of mtg-grimoire's 1,551 files was $0.19 of summaries plus $0.004
-of embeddings; after that only changed files are paid for). Measured on
-mtg-grimoire: a created issue used $0.0019 of GPT-6 Luna and 9,631 Jev input
-tokens (≈ $0.0004), where reading the whole map had cost 179k Jev tokens.
+1000 reports a month come to about **$5**, and code context does not grow
+with the size of the repository. Measured on Haiku with `--dry-run` on
+mtg-grimoire (2026-10-14, reasoning `low`): a report cost $0.0046–0.0056 of
+chat (draft ~$0.0002 in 2–4 s, search terms $0.0027, code notes ~$0.002)
+plus ~12,600 Jev input tokens (≈ $0.0005). Keeping the repository map current adds cents: a
+first build of mtg-grimoire's 2,000 mapped files was $0.62 on Haiku (223
+calls, embeddings included; Luna on flex had built 1,551 files for $0.19);
+after that only changed files are paid for. Measured on mtg-grimoire with
+Luna: a created issue used $0.0019 of chat on flex and 9,631 Jev input tokens
+(≈ $0.0004), where reading the whole map had cost 179k Jev tokens.
 
 The bot logs the AI usage of every drafted report, created issue and map
 refresh as `$<cost> in <n> call(s), <k> decision-model input tokens`.
 
 **BYOK.** With your own provider keys behind OpenRouter ("bring your own
 key"), OpenRouter's reported `cost` is only its own fee — usually $0 — and the
-provider bills you directly. Chat responses still say what OpenAI charged
+provider bills you directly. Chat responses still say what the provider charged
 (`cost_details.upstream_inference_cost`), and the bot counts that. Decision
 responses report no upstream cost, so for Jev the logs show input tokens
 instead: TypeSafe bills those at $0.042 per million.
 
 **Hard caps.** Without BYOK, set a monthly credit limit on the OpenRouter key.
 With BYOK that limit only caps OpenRouter's fees — set the budget limits on
-the OpenAI and TypeSafe accounts instead. The per-user report limit only stops
+the Anthropic (or Google Vertex) and TypeSafe accounts instead. The per-user report limit only stops
 one account from spending the budget.
 
 ### Tuning the decisions
@@ -386,11 +389,10 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
   "Discord": { "Token": "<secret>" },
   "OpenRouter": {
     "ApiKey": "<secret>",
-    "ChatModel": "openai/gpt-6-luna",
-    "ChatProviders": ["openai/flex", "openai"],
-    "RegularProviders": ["openai"],
+    "ChatModel": "anthropic/claude-haiku-5.5",
+    "ChatProviders": ["anthropic", "google-vertex"],
     "ChatDeadlineSeconds": 30,
-    "ReasoningEffort": "medium",
+    "ReasoningEffort": "low",
     "DecisionModel": "typesafe/jev-1.13",
     "EmbeddingModel": "voyageai/voyage-4"
   },
@@ -409,7 +411,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 }
 ```
 
-`ChatProviders`, `RegularProviders` and `IgnoredLabels` fall back to their
+`ChatProviders` and `IgnoredLabels` fall back to their
 defaults when absent; a configured list replaces the default rather than
 extending it. `Database:Path` is relative to the working directory
 (`db/app.db` by default); the folder is created at startup if it does not
@@ -428,7 +430,8 @@ deadline is not positive or the report limit is negative; there are no apps;
 or any app has an empty name, a `Repo` that isn't `owner/repo`, a repo that
 another app already claims (case insensitive), no guild ids, no channel ids,
 or credentials that are not exactly one of the two forms described next. A
-leftover `OpenAI` section from an older build prints a warning.
+leftover `OpenAI` section or `OpenRouter:RegularProviders` list from an older
+build prints a warning.
 
 ### GitHub credentials: PAT or GitHub App
 

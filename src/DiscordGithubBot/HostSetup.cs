@@ -121,7 +121,7 @@ public static class HostSetup
     /// <summary>
     /// The key is the same for every call, so it rides as a default header. The client timeout is off:
     /// each call sets its own deadline — seconds for a reporter who is waiting, minutes for background
-    /// work that may sit in the flex queue — and a fixed timeout here would cut the long ones short.
+    /// work nobody waits on — and a fixed timeout here would cut the long ones short.
     /// </summary>
     private static void ConfigureOpenRouterClient(HttpClient http, BotOptions options)
     {

@@ -90,7 +90,7 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.True(state.IsComplete);
 
         Assert.Contains("contents of s1", Assert.Single(seen).User);
-        // Background work waits out the flex queue rather than paying for the regular tier.
+        // Nobody waits on the map, so its calls take the long background deadline.
         Assert.Equal([ChatUrgency.Background], chat.Urgencies);
     }
 
@@ -367,7 +367,7 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.Equal(2, seen.Count);
     }
 
-    /// <summary>At the configured medium, a batch of one-line summaries took ~10 s — most of a first build.</summary>
+    /// <summary>At medium, a batch of one-line summaries took ~10 s — most of a first build — so a raised effort skips them.</summary>
     [Fact]
     public async Task Summaries_run_at_the_lower_summary_reasoning_effort()
     {
