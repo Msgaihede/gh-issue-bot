@@ -10,7 +10,7 @@ relevant code — without the reporter ever needing a GitHub account.
 
 Anyone runs `/issue`, describes the problem, and attaches screenshots. A
 decision model (TypeSafe's **Jev**) decides whether it is a bug or a feature,
-GPT-6 Luna writes the issue, Jev reads the repository's open issues to catch
+Claude Haiku 5.5 writes the issue, Jev reads the repository's open issues to catch
 duplicates and picks the repository's own labels, and the reporter confirms
 before anything touches GitHub. Created issues list the source files and docs
 they are most likely about. Every model call goes through
@@ -36,9 +36,9 @@ they are most likely about. Every model call goes through
   source file and Markdown doc, refreshed incrementally) lets the bot name the
   relevant files and explain how they relate — written into the GitHub issue
   only, never shown in Discord.
-- **Cheap by design** — GPT-6 Luna on OpenAI's flex tier with automatic
-  fallback to the regular tier, Jev for everything that is a decision, code
-  context only for issues that are actually created: ≈ $0.004 per report,
+- **Cheap by design** — Claude Haiku 5.5 for the writing, Jev for
+  everything that is a decision, code context from a shortlist rather than
+  the whole repository map: ≈ $0.005 per report,
   so 1000 reports a month stay under $5 (see [APP.md](APP.md#cost)).
 - **Human in the loop** — nothing reaches GitHub without an explicit click;
   every interaction stays ephemeral until an issue is created (or you
@@ -56,7 +56,7 @@ they are most likely about. Every model call goes through
 flowchart TD
     A["/issue modal:<br>description + screenshots"] --> B["Download image bytes immediately"]
     B --> C["Jev: bug or feature?"]
-    C --> D["GPT-6 Luna: body + 3 candidate titles"]
+    C --> D["Haiku 5.5: body + 3 candidate titles"]
     D --> E["Jev: best title + repo labels"]
     D --> F["Jev: shortlist open issues,<br>then compare in full"]
     E --> G{Duplicate?}
@@ -66,7 +66,7 @@ flowchart TD
     G -->|no| J["Draft preview: type, labels, title, body"]
     H -->|confirm| K["Comment with only what this report adds"]
     I --> J
-    J -->|Create issue| L["Jev picks files from the repo map,<br>Luna writes code notes"]
+    J -->|Create issue| L["Jev picks files from the repo map,<br>Haiku writes code notes"]
     L --> M["New issue: labels, screenshots, relevant code + docs,<br>reporter footer + public announcement"]
 ```
 
@@ -87,7 +87,7 @@ flowchart TD
   *Installation* in the [Developer Portal](https://discord.com/developers/applications)
 - An [OpenRouter API key](https://openrouter.ai/keys) — put a monthly credit
   limit on it, or, if your provider keys are BYOK behind OpenRouter, set the
-  budget limits on the OpenAI and TypeSafe accounts instead
+  budget limits on the Anthropic and TypeSafe accounts instead
 - GitHub credentials per repository: a personal access token **or** a GitHub
   App installation
 
@@ -113,7 +113,7 @@ sources win. The minimal shape:
 }
 ```
 
-Models default to `openai/gpt-6-luna` and `typesafe/jev-1.13`. `.env.example`
+Models default to `anthropic/claude-haiku-5.5` and `typesafe/jev-1.13`. `.env.example`
 documents the environment-variable form of every knob. Configuration is
 validated at startup: any problem is printed as a `CONFIG ERROR: …` line and
 the bot exits before connecting to anything.

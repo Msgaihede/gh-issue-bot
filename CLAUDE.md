@@ -35,10 +35,12 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   `DecisionClient`) — never add another AI SDK or endpoint.
 - The decision model must be a pinned id (`typesafe/jev-1.13`), never a
   `~...-latest` alias — startup rejects aliases; thresholds belong to a build.
-- Flex is only reachable by naming `openai/flex` in `provider.order`
-  (a bare `openai` never matches it). Interactive chat calls have a deadline
-  (`ChatDeadlineSeconds`) and one retry on `RegularProviders`. A prompt marked
-  `ChatTier.Regular` (today: only the draft) skips flex entirely.
+- Chat runs on `anthropic/claude-haiku-5.5`, routed by `ChatProviders`
+  (`anthropic`, then `google-vertex`) with `require_parameters` so a host
+  without strict structured output (Bedrock) is never used. Interactive chat
+  calls have a deadline (`ChatDeadlineSeconds`) and one retry with the hosts
+  rotated, next host first (`EffectiveRetryProviders`). There is no flex tier
+  any more (decision 107).
 - Structured-output schemas are generated from the answer DTO
   (`StructuredOutput`); strict mode needs every property required and no
   nullable members — keep DTO fields non-nullable.
@@ -78,7 +80,7 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   cache is never trusted for this.
 - All interaction replies are ephemeral; only issue creations post publicly,
   plus `/issue-install public:True`, which posts a plain channel message and
-  deletes its own deferred reply (decision 107).
+  deletes its own deferred reply (decision 109).
 - A button/select handler answers through `AnswerClickAsync` (→
   `ClickedMessage.ReplaceAsync`), which edits the "Working on it…" note the
   click left — never `FollowupAsync`, which posts a second message beside it.
