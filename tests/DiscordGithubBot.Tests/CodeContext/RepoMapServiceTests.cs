@@ -90,7 +90,7 @@ public sealed class RepoMapServiceTests : IDisposable
         Assert.True(state.IsComplete);
 
         Assert.Contains("contents of s1", Assert.Single(seen).User);
-        // Background work waits out the flex queue rather than paying for the regular tier.
+        // Nobody waits on the map, so its calls take the long background deadline.
         Assert.Equal([ChatUrgency.Background], chat.Urgencies);
     }
 

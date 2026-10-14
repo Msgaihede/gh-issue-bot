@@ -37,6 +37,9 @@ var options = builder.Configuration.Get<BotOptions>() ?? new BotOptions();
 // would otherwise fail on the missing OpenRouter key without saying why the old key stopped counting.
 if (builder.Configuration.GetSection("OpenAI").GetChildren().Any())
     Console.Error.WriteLine("CONFIG WARNING: the OpenAI section is no longer read; configure OpenRouter:ApiKey instead.");
+// RegularProviders went away with OpenAI's flex tier (decision 107): retries now reuse ChatProviders.
+if (builder.Configuration.GetSection("OpenRouter:RegularProviders").GetChildren().Any())
+    Console.Error.WriteLine("CONFIG WARNING: OpenRouter:RegularProviders is no longer read; retries use OpenRouter:ChatProviders, next host first.");
 var errors = options.Validate();
 if (errors.Count > 0)
 {

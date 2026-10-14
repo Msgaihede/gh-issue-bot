@@ -71,7 +71,7 @@ public sealed class RepoMapService(
 
     /// <summary>
     /// Summary batches in flight at once. One at a time, a first build of ~1,550 files was ~170 model calls
-    /// back to back; four keeps the flex queue and OpenRouter far from any limit while cutting that to a quarter.
+    /// back to back; four keeps the chat hosts and OpenRouter far from any rate limit while cutting that to a quarter.
     /// </summary>
     internal const int SummaryConcurrency = 4;
 

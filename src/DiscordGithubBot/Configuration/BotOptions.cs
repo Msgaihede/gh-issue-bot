@@ -14,37 +14,28 @@ public sealed class DiscordOptions
 /// </summary>
 public sealed class OpenRouterOptions
 {
-    /// <summary>Tried first: OpenAI's half-price flex tier, then OpenAI's regular endpoint.</summary>
-    public static readonly IReadOnlyList<string> DefaultChatProviders = ["openai/flex", "openai"];
-
     /// <summary>
-    /// The regular tier: where a call that must be fast goes (<see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>), and where
-    /// a flex call is retried after missing its deadline or failing transiently.
+    /// Hosts of the chat model, in order: Anthropic itself, then Google Vertex. Both serve Haiku 5.5 with
+    /// strict structured output; Bedrock does not, so <c>require_parameters</c> would skip it anyway.
     /// </summary>
-    public static readonly IReadOnlyList<string> DefaultRegularProviders = ["openai"];
+    public static readonly IReadOnlyList<string> DefaultChatProviders = ["anthropic", "google-vertex"];
 
     public string ApiKey { get; set; } = "";
 
     /// <summary>Model that writes drafts, file summaries and code notes.</summary>
-    public string ChatModel { get; set; } = "openai/gpt-6-luna";
+    public string ChatModel { get; set; } = "anthropic/claude-haiku-5.5";
 
     /// <summary>
-    /// OpenRouter <c>provider.order</c> for the first attempt of a flex-tier chat call (every call except the
-    /// ones marked <see cref="DiscordGithubBot.OpenRouter.ChatTier.Regular"/>). Nullable rather than initialised because the
-    /// configuration binder appends to an existing list instead of replacing it — a configured list would
-    /// otherwise land after the defaults. See <see cref="EffectiveChatProviders"/>.
+    /// OpenRouter <c>provider.order</c> for every chat call; a retry starts from the second entry (see
+    /// <see cref="EffectiveRetryProviders"/>). Nullable rather than initialised because the configuration
+    /// binder appends to an existing list instead of replacing it — a configured list would otherwise land
+    /// after the defaults.
     /// </summary>
     public List<string>? ChatProviders { get; set; }
 
     /// <summary>
-    /// <c>provider.order</c> for regular-tier calls and for every retry; nullable for the same reason as
-    /// <see cref="ChatProviders"/>.
-    /// </summary>
-    public List<string>? RegularProviders { get; set; }
-
-    /// <summary>
     /// How long an interactive chat call (a reporter is waiting) may spend on the first attempt before it is
-    /// retried on <see cref="EffectiveRegularProviders"/>. Flex can queue; this caps what that costs.
+    /// retried with the next host first. A slow host is no likelier to answer by waiting longer.
     /// </summary>
     public int ChatDeadlineSeconds { get; set; } = 30;
 
@@ -68,7 +59,12 @@ public sealed class OpenRouterOptions
 
     public IReadOnlyList<string> EffectiveChatProviders => ChatProviders ?? DefaultChatProviders;
 
-    public IReadOnlyList<string> EffectiveRegularProviders => RegularProviders ?? DefaultRegularProviders;
+    /// <summary>
+    /// The order a retry uses: the same hosts, rotated so the one that just failed or stalled goes last.
+    /// With a single host (or none) it is the same order.
+    /// </summary>
+    public IReadOnlyList<string> EffectiveRetryProviders =>
+        [.. EffectiveChatProviders.Skip(1), .. EffectiveChatProviders.Take(1)];
 }
 
 public sealed class LimitsOptions

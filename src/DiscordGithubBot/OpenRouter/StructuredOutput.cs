@@ -8,7 +8,7 @@ namespace DiscordGithubBot.OpenRouter;
 /// <summary>
 /// JSON schemas for strict structured output, generated from the C# type the answer is parsed into, so
 /// the schema a model is held to and the shape the code reads can never drift apart. Strict mode
-/// (OpenAI's, which OpenRouter passes through) insists that every object closes itself with
+/// (OpenAI's contract, which OpenRouter holds every host to) insists that every object closes itself with
 /// <c>additionalProperties: false</c> and lists every property as required; the exporter emits neither,
 /// and marks reference types nullable, so each node is tightened on the way out.
 /// </summary>

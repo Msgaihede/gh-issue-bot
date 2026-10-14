@@ -1620,3 +1620,37 @@ below record the choices inside it that are not obvious from the code.
      prints every asked label with its P, the attached ones marked and the
      type label named, because the raw Debug answers only know labels by
      index.
+
+## 2026-10-14 (Claude Haiku 5.5)
+
+107. **Chat moves from GPT-6 Luna to `anthropic/claude-haiku-5.5`, and the
+     flex machinery goes with it.** At the owner's request. Haiku 5.5 costs
+     what Luna's regular tier did ($0.10 / $0.50 per million tokens) and
+     OpenRouter's Anthropic, Google Vertex and Azure hosts serve it with
+     strict structured output and `reasoning_effort`; Bedrock and Claude on
+     AWS serve it without structured output, and `require_parameters` keeps
+     them out. Anthropic has no flex tier, so the `openai/flex`-first order
+     (decision 77) and the draft's regular-tier shortcut (decision 98's
+     `ChatTier`) had nothing left to choose between: keeping them as
+     configuration was weighed against removing them, and the owner chose
+     removal. `ChatTier` and `RegularProviders` are gone; `ChatProviders`
+     (default `anthropic`, `google-vertex`) is the one order, and the retry
+     after a missed deadline or a transient failure reuses it rotated, next
+     host first, since a host that just stalled is the worst place to try
+     again. A leftover `RegularProviders` setting prints a startup warning
+     rather than failing. Losing flex roughly doubles background chat
+     (search terms, code notes, the repository map): ≈ $0.005 a report
+     instead of ≈ $0.0036, and a first map of ~1,550 files ≈ $0.38 instead
+     of $0.19. Reasoning effort stays `medium`, as chosen for Luna
+     (decision 99); it has not been compared across levels on Haiku.
+     The model id is pinned, not `~anthropic/claude-haiku-latest`, for the
+     same reason decision models are: prompts were checked against one
+     build. One `--dry-run` on mtg-grimoire (an apostrophe search bug)
+     confirmed the whole path: every call answered via Anthropic, the draft
+     followed the bug template, Jev's title/labels/dedup were sensible, and
+     the code notes found the query lexer and the documented apostrophe
+     rule. Measured: the draft took 7.1 s ($0.00045) — slower than Luna's
+     ~4.0 s on the regular tier, worth watching; the report's chat cost
+     $0.0053; a first map of 2,000 files cost $0.62 (more than the $0.38
+     scaled from Luna, since the map is now capped at 2,000 files and
+     Haiku's tokens differ).

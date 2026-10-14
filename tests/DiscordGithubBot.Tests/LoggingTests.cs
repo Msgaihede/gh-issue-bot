@@ -69,7 +69,7 @@ public sealed class LoggingTests
         StartupLog.Write(logger, options);
 
         var text = string.Join("\n", logger.Messages(LogLevel.Information));
-        Assert.Contains("openai/gpt-6-luna (reasoning medium)", text);
+        Assert.Contains("anthropic/claude-haiku-5.5 (reasoning medium)", text);
         Assert.Contains("typesafe/jev-1.13", text);
         Assert.Contains("App Grimoire -> Owner/Grimoire: GitHub PAT, 1 server(s) [42]", text);
         Assert.Contains("App Other -> Owner/Other: GitHub App 7 (installation 9)", text);
