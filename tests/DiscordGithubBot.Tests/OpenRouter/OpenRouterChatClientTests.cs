@@ -51,7 +51,7 @@ public class OpenRouterChatClientTests
 
     /// <summary>Anthropic first, Vertex behind it, never a host that would ignore the schema.</summary>
     [Fact]
-    public async Task Requests_haiku_on_anthropic_first_with_fallbacks_a_strict_schema_and_medium_reasoning()
+    public async Task Requests_haiku_on_anthropic_first_with_fallbacks_a_strict_schema_and_low_reasoning()
     {
         _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
@@ -62,7 +62,7 @@ public class OpenRouterChatClientTests
         Assert.Equal(["anthropic", "google-vertex"], body["provider"]!["order"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.True(body["provider"]!["allow_fallbacks"]!.GetValue<bool>());
         Assert.True(body["provider"]!["require_parameters"]!.GetValue<bool>());
-        Assert.Equal("medium", body["reasoning"]!["effort"]!.GetValue<string>());
+        Assert.Equal("low", body["reasoning"]!["effort"]!.GetValue<string>());
 
         var format = body["response_format"]!["json_schema"]!;
         Assert.Equal("test_answer", format["name"]!.GetValue<string>());
@@ -239,8 +239,8 @@ public class OpenRouterChatClientTests
     {
         _http.Then(HttpStatusCode.OK, Completion(new Answer("t", [])));
 
-        await Client().CompleteAsync<Answer>(Prompt with { ReasoningEffort = "low" }, ChatUrgency.Background);
+        await Client().CompleteAsync<Answer>(Prompt with { ReasoningEffort = "high" }, ChatUrgency.Background);
 
-        Assert.Equal("low", _http.Requests.Single().Body!["reasoning"]!["effort"]!.GetValue<string>());
+        Assert.Equal("high", _http.Requests.Single().Body!["reasoning"]!["effort"]!.GetValue<string>());
     }
 }

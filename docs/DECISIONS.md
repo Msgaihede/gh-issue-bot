@@ -1641,8 +1641,8 @@ below record the choices inside it that are not obvious from the code.
      rather than failing. Losing flex roughly doubles background chat
      (search terms, code notes, the repository map): ≈ $0.005 a report
      instead of ≈ $0.0036, and a first map of ~1,550 files ≈ $0.38 instead
-     of $0.19. Reasoning effort stays `medium`, as chosen for Luna
-     (decision 99); it has not been compared across levels on Haiku.
+     of $0.19. Reasoning effort was left at `medium`, as chosen for Luna
+     (decision 99), until it could be compared on Haiku (decision 108).
      The model id is pinned, not `~anthropic/claude-haiku-latest`, for the
      same reason decision models are: prompts were checked against one
      build. One `--dry-run` on mtg-grimoire (an apostrophe search bug)
@@ -1654,3 +1654,23 @@ below record the choices inside it that are not obvious from the code.
      $0.0053; a first map of 2,000 files cost $0.62 (more than the $0.38
      scaled from Luna, since the map is now capped at 2,000 files and
      Haiku's tokens differ).
+
+108. **Haiku 5.5 runs at reasoning effort `low`.** Amends decision 99 for the
+     new model. Compared with `--dry-run` on mtg-grimoire, alternating
+     `medium` and `low` on one database: the apostrophe bug report three
+     times at each level and a deck-export feature request once. Drafts
+     averaged ~4.8 s at `medium` (7.1, 4.8, 2.5 s — it sometimes reasons
+     at length, 793 output tokens against ~330) and ~3.1 s at `low` (3.6,
+     2.3, 3.3 s); the feature draft took 2.7 s against 1.7 s. Code notes
+     took 9.2–9.5 s at `medium` and 4.4–5.6 s at `low`. Read side by side,
+     titles, labels, dedup and the picked files were the same; `medium`
+     once added the "search without the apostrophe" reproduction step and
+     noticed in the docs that the bug had been fixed before (a likely
+     regression), while `low` found one more relevant file in each code
+     note and once wrote "Urza s Saga" for the apostrophe-free search.
+     Neither level invented anything. The owner chose `low` everywhere
+     rather than only for the draft: the reporter waits on the draft, and
+     faster code notes reach the issue before a quick click more often.
+     Four runs per level is a small sample; revisit if drafts start
+     skipping template sections. The repository map's summaries were
+     already pinned at `low` and stay so if the setting is raised.

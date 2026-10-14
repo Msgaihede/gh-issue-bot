@@ -77,15 +77,15 @@ public class BotOptionsTests
     }
 
     [Fact]
-    public void The_reasoning_effort_defaults_to_medium_and_is_set_by_its_env_var()
+    public void The_reasoning_effort_defaults_to_low_and_is_set_by_its_env_var()
     {
-        Assert.Equal("medium", new OpenRouterOptions().ReasoningEffort);
+        Assert.Equal("low", new OpenRouterOptions().ReasoningEffort);
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["OpenRouter:ReasoningEffort"] = "low",
+            ["OpenRouter:ReasoningEffort"] = "medium",
         }).Build();
-        Assert.Equal("low", config.Get<BotOptions>()!.OpenRouter.ReasoningEffort);
+        Assert.Equal("medium", config.Get<BotOptions>()!.OpenRouter.ReasoningEffort);
     }
 
     [Fact]

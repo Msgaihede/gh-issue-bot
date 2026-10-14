@@ -267,14 +267,14 @@ hosts rotated, next host first (`["google-vertex", "anthropic"]`). Background
 work (the repository map) gets a 10-minute deadline instead. Anthropic has no
 discounted flex tier, so there is no cheaper tier to route to (decision 107).
 
-**Reasoning effort** is `medium` for every chat call except the
-repository map's one-line summaries (always `low`), set by
+**Reasoning effort** is `low` for every chat call, set by
 `OpenRouter:ReasoningEffort` (env var `OpenRouter__ReasoningEffort`): one of
 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or empty for the
-model's own default; anything else fails startup. `medium` was chosen for
-GPT-6 Luna (decision 99: `low` and `medium` wrote equally good drafts, `none`
-skipped bug-template sections) and kept for Haiku 5.5 untested — compare
-levels with `--dry-run` on real reports before relying on it.
+model's own default; anything else fails startup. The repository map's
+one-line summaries stay at `low` even when it is raised. Compared on Haiku 5.5
+with `--dry-run` (decision 108): `low` drafted a bug report in ~3.1 s against
+~4.8 s at `medium` (and far less erratically), wrote code notes in ~5 s
+against ~9.4 s, and read as well as `medium` side by side.
 
 **Pinned models.** `DecisionModel` must be a versioned id — startup rejects a
 `~…-latest` alias, because every decision threshold belongs to one build.
@@ -291,7 +291,7 @@ it; Haiku's tokenizer and reasoning differ, so re-measure from the usage logs.
 | Per report (typical) | Cost |
 | --- | --- |
 | Jev: type | $0.00006 |
-| Haiku: draft (reasoning medium) | $0.0005 |
+| Haiku: draft (reasoning low) | $0.0003 |
 | Jev: title + type label + 40 labels | $0.0003 |
 | Jev: duplicate check over 200 open issues | $0.0012 |
 | Code context — every draft, built in the background: search terms, issue embedding, Jev picks (~6k tokens), notes | ≈ $0.0034 |
@@ -299,9 +299,9 @@ it; Haiku's tokenizer and reasoning differ, so re-measure from the usage logs.
 
 1000 reports a month come to about **$5**, and code context does not grow
 with the size of the repository. Measured on Haiku with `--dry-run` on
-mtg-grimoire (2026-10-14): one bug report cost $0.0053 of chat (draft
-$0.00045 in 7.1 s, search terms $0.0027, code notes $0.0021) plus 12,629 Jev
-input tokens (≈ $0.0005). Keeping the repository map current adds cents: a
+mtg-grimoire (2026-10-14, reasoning `low`): a report cost $0.0046–0.0056 of
+chat (draft ~$0.0002 in 2–4 s, search terms $0.0027, code notes ~$0.002)
+plus ~12,600 Jev input tokens (≈ $0.0005). Keeping the repository map current adds cents: a
 first build of mtg-grimoire's 2,000 mapped files was $0.62 on Haiku (223
 calls, embeddings included; Luna on flex had built 1,551 files for $0.19);
 after that only changed files are paid for. Measured on mtg-grimoire with
@@ -392,7 +392,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
     "ChatModel": "anthropic/claude-haiku-5.5",
     "ChatProviders": ["anthropic", "google-vertex"],
     "ChatDeadlineSeconds": 30,
-    "ReasoningEffort": "medium",
+    "ReasoningEffort": "low",
     "DecisionModel": "typesafe/jev-1.13",
     "EmbeddingModel": "voyageai/voyage-4"
   },

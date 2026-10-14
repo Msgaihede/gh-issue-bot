@@ -46,7 +46,7 @@ public sealed class OpenRouterOptions
     /// OpenRouter <c>reasoning.effort</c> for every chat call (env var <c>OpenRouter__ReasoningEffort</c>); one of
     /// <see cref="ReasoningEfforts"/>, or empty to leave the model's own default.
     /// </summary>
-    public string ReasoningEffort { get; set; } = "medium";
+    public string ReasoningEffort { get; set; } = "low";
 
     /// <summary>Decision (System One) model for every judgment: type, title, labels, dedup, file selection.</summary>
     public string DecisionModel { get; set; } = "typesafe/jev-1.13";

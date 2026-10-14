@@ -82,8 +82,8 @@ public sealed class RepoMapService(
     internal const int BlobFetchConcurrency = 8;
 
     /// <summary>
-    /// One-line summaries need little thought, and at the configured <c>medium</c> each batch took ~10 s — most
-    /// of a first build. Not <c>none</c>: that level failed a structured answer in decision 99's comparison, and
+    /// One-line summaries need little thought, and at <c>medium</c> each batch took ~10 s — most of a first
+    /// build — so they stay at <c>low</c> even when the configured effort is raised. Not <c>none</c>: that level failed a structured answer in decision 99's comparison, and
     /// a failed batch here is parked until its files change.
     /// </summary>
     internal const string SummaryReasoningEffort = "low";
