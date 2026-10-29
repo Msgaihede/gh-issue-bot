@@ -79,11 +79,15 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   (`IGuildMembership`) — the bot has only the `Guilds` intent, so its member
   cache is never trusted for this.
 - All interaction replies are ephemeral; only issue creations post publicly,
-  plus `/issue-install public:True`, which posts a plain channel message and
-  deletes its own deferred reply (decision 109).
+  plus `/issue-install public:True` and `/issue-button`, which post a plain
+  channel message (`PostPubliclyAsync`) and delete their own deferred reply
+  (decisions 109-110).
 - A button/select handler answers through `AnswerClickAsync` (→
   `ClickedMessage.ReplaceAsync`), which edits the "Working on it…" note the
   click left — never `FollowupAsync`, which posts a second message beside it.
+  The exception is the public **Report an issue** button (`CustomIds.OpenReport`):
+  it answers with the modal and never through `RunAsync`, whose "Working on
+  it…" acknowledgement would replace the shared message for everyone.
 - The report modal's "App" dropdown is not declared on ReportModal — its
   options are per-guild, so OpenModalAsync injects it via `modifyModal`, and
   the submit handler reads the pick from the raw modal data when the custom

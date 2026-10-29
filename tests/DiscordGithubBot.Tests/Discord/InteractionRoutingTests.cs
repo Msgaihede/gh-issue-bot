@@ -40,11 +40,13 @@ public class InteractionRoutingTests
 
     /// <summary>One reporting command; the decision model, not the reporter, decides bug or feature.</summary>
     [Fact]
-    public async Task Registers_the_report_command_the_install_link_and_the_issue_list()
+    public async Task Registers_the_report_command_the_install_link_the_report_button_and_the_issue_list()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(["issue", "issue-install", "list-issues"], module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(
+            ["issue", "issue-button", "issue-install", "list-issues"],
+            module.SlashCommands.Select(c => c.Name).Order());
     }
 
     /// <summary>
@@ -89,6 +91,15 @@ public class InteractionRoutingTests
         Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue").Parameters);
     }
 
+    /// <summary>The posted button is for everyone to press; the command that posts it asks nothing.</summary>
+    [Fact]
+    public async Task The_report_button_command_takes_no_options()
+    {
+        var module = await BuildModuleAsync();
+
+        Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue-button").Parameters);
+    }
+
     [Fact]
     public async Task Routes_every_custom_id_action_to_a_handler()
     {
@@ -100,7 +111,7 @@ public class InteractionRoutingTests
         ];
 
         Assert.Equal(
-            actions.Select(a => $"{CustomIds.Prefix}|{a}|*|*").Order(),
+            actions.Select(a => $"{CustomIds.Prefix}|{a}|*|*").Append(CustomIds.OpenReport).Order(),
             module.ComponentCommands.Select(c => c.Name).Order());
     }
 

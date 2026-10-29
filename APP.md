@@ -205,11 +205,17 @@ starts from the right place:
   caller to clean up); where it can't — a user install in a server the bot
   isn't in, a group DM, a channel it may not write to — it falls back to a
   public reply.
+- **`/issue-button`** — posts a standing **Report an issue** button in the
+  channel, the same way `/issue-install public:True` posts its link (a plain
+  bot message where the bot may post, a public reply elsewhere). Anyone who
+  presses it gets exactly what `/issue` gives them: their own apps, rate limit
+  and modal, or an ephemeral refusal. The button's custom id is fixed
+  (`open-report`), so a posted button keeps working across restarts.
 - **`/list-issues [app]`** — an ephemeral list of the target repo's open issue
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
 
-`/issue` takes no options: with one reachable app the modal opens straight
+`/issue` (and the **Report an issue** button) takes no options: with one reachable app the modal opens straight
 away, with several the modal asks which via a dropdown. `/list-issues` keeps an
 `app` option (it opens no modal to ask in), needed only when several apps are
 reachable; an unknown name answers with the valid ones.
@@ -251,7 +257,7 @@ per-server registrations of earlier versions; the bot clears those on start.
 Because every report costs money and anyone in a configured server can
 report from anywhere once they install the bot, each Discord user may submit **10 reports per
 rolling 24 hours** by default (`Limits:ReportsPerUserPerDay`, `0` = no cap).
-The limit is checked when `/issue` opens the modal and counted on submit; it
+The limit is checked when `/issue` (or the button) opens the modal and counted on submit; it
 lives in memory, so a restart resets it.
 
 ## Models and cost
@@ -665,6 +671,9 @@ configured app. Enable **User Install** in the Developer Portal first.
    `/issue-install public:True` in a bot server's channel posts the link as a
    plain bot message with no reply above it; in a server without the bot it
    comes as a public reply instead.
+   `/issue-button` behaves the same way and posts a **Report an issue**
+   button; pressing it (from a second account too) opens the report modal,
+   and the posted message itself stays unchanged.
 8. **Rate limit.** With `Limits__ReportsPerUserPerDay=1`, a second `/issue`
    within a day answers with the time you can report again instead of a modal.
 9. **`/list-issues`.** The ephemeral list shows the repository's open issues

@@ -17,6 +17,12 @@ public static class CustomIds
     public const string Draft = "draft";
     public const string Pick = "pick";
 
+    /// <summary>
+    /// The "Report an issue" button <c>/issue-button</c> posts. It belongs to no report — it opens a new
+    /// one — so it is a fixed id outside the <c>rep|…</c> format, and stays clickable across restarts.
+    /// </summary>
+    public const string OpenReport = "open-report";
+
     private const int Segments = 4;
 
     /// <param name="issueNumber">The issue to comment on, or 0 when the action needs no issue.</param>

@@ -118,6 +118,6 @@ public class HostSetupTests
         var modules = await interactions.AddModulesAsync(typeof(BotService).Assembly, scope.ServiceProvider);
 
         Assert.NotEmpty(modules);
-        Assert.Equal(3, interactions.SlashCommands.Count);
+        Assert.Equal(4, interactions.SlashCommands.Count);
     }
 }

@@ -30,6 +30,11 @@ public class CustomIdsTests
     [InlineData("rep|create|00000000000000000000000000000000|NaN")]
     public void Rejects_malformed_ids(string s) => Assert.False(CustomIds.TryParse(s, out _, out _, out _));
 
+    /// <summary>The report button is not a report action: the codec must not half-read it as one.</summary>
+    [Fact]
+    public void The_report_button_id_is_not_a_report_id() =>
+        Assert.False(CustomIds.TryParse(CustomIds.OpenReport, out _, out _, out _));
+
     [Fact]
     public void Stays_within_discord_100_char_limit() =>
         Assert.InRange(CustomIds.Build(CustomIds.Comment, Guid.NewGuid(), int.MaxValue).Length, 1, 100);
