@@ -1691,3 +1691,20 @@ below record the choices inside it that are not obvious from the code.
      header is the price of reaching the channel at all. A send that fails
      despite the cache saying yes tells the caller ephemerally. The option is
      `public`, off by default, so the old private behaviour is unchanged.
+
+## 2026-10-29 (report button)
+
+110. **`/issue-button` posts a standing "Report an issue" button.** The owner
+     wanted a channel message anyone can press to open the report modal, like
+     the public install link. It reuses decision 109's posting path (now
+     `PostPubliclyAsync`, shared with `/issue-install public:True`), and the
+     command is always public — a private button would just be `/issue`. The
+     button is a fixed custom id, `open-report`, outside the `rep|…` codec:
+     it belongs to no pending report, and a fixed id keeps posted buttons
+     working across restarts. The click runs the `/issue` flow for whoever
+     pressed it (their apps from `AppAccess`, their rate limit) and answers
+     with the modal or an ephemeral refusal — never through `RunAsync`, whose
+     acknowledgement replaces the clicked message and would take the button
+     away from everyone. The button carries no app: who presses it decides
+     which apps are on offer, exactly as with `/issue`. Like
+     `/issue-install`, anyone who can run commands may post it.

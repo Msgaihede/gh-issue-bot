@@ -266,6 +266,16 @@ public class OutcomeRendererTests
     }
 
     [Fact]
+    public void The_report_button_card_opens_a_new_report_for_whoever_presses_it()
+    {
+        var button = Assert.Single(Buttons(OutcomeRenderer.RenderReportButton()));
+
+        Assert.Equal(ButtonStyle.Primary, button.Style);
+        Assert.Equal("Report an issue", button.Label);
+        Assert.Equal(CustomIds.OpenReport, button.CustomId);
+    }
+
+    [Fact]
     public void The_working_placeholder_has_no_buttons_left_to_click()
     {
         var message = OutcomeRenderer.RenderWorking();

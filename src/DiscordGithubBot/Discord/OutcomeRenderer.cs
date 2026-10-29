@@ -141,6 +141,14 @@ public static class OutcomeRenderer
                 "not just the servers it was added to.")
             .WithActionRow(row => row.WithButton(ButtonBuilder.CreateLinkButton("Add to my account", url))));
 
+    /// <summary>The <c>/issue-button</c> card: a standing button anyone in the channel can press to report.</summary>
+    public static MessageComponent RenderReportButton() =>
+        Container(container => container
+            .WithTextDisplay(
+                "**Found a bug or have an idea?**\n" +
+                "Press the button to report it — the bot checks for duplicates and files it on GitHub.")
+            .WithActionRow(row => row.WithButton("Report an issue", CustomIds.OpenReport, ButtonStyle.Primary)));
+
     /// <summary>
     /// Replaces a clicked message while the slow work runs: the buttons go away, so the same report
     /// cannot be submitted twice from the same message.

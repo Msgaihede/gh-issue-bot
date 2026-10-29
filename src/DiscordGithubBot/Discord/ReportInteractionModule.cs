@@ -66,13 +66,8 @@ public class ReportInteractionModule(
 
     /// <summary>
     /// Hands out the link that adds the bot to the caller's own Discord account, after which <c>/issue</c>
-    /// works in any server, DM or group DM — not only in the servers the bot was added to.
-    /// <para>
-    /// With <c>public</c> the link is for everyone in the channel. Where the bot itself may post, it posts a
-    /// plain channel message and answers the interaction with nothing at all, so no "used /issue-install"
-    /// header hangs over the link. Anywhere else (a user install in a server the bot is not in, a group DM,
-    /// a channel it may not write to) a public reply is the only way left to show it.
-    /// </para>
+    /// works in any server, DM or group DM — not only in the servers the bot was added to. With
+    /// <c>public</c> the link is posted for everyone in the channel (see <see cref="PostPubliclyAsync"/>).
     /// </summary>
     [SlashCommand("issue-install", "Get a link to add this bot to your own Discord account", runMode: RunMode.Sync)]
     public async Task IssueInstall(
@@ -80,39 +75,19 @@ public class ReportInteractionModule(
     {
         var card = OutcomeRenderer.RenderInstallLink(InstallLinks.UserInstall(Context.Interaction.ApplicationId));
 
-        if (!isPublic || PostableChannel() is not { } channel)
-        {
-            await RespondAsync(components: card, ephemeral: !isPublic);
-            return;
-        }
-
-        // Acknowledged first — the three-second deadline — then the deferred "thinking" note is deleted
-        // once the channel message is out, which leaves the bot's message as the only trace.
-        await DeferAsync(ephemeral: true);
-
-        try
-        {
-            await channel.SendMessageAsync(components: card, flags: MessageFlags.ComponentsV2);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not post the install link in channel {ChannelId}.", channel.Id);
-            await FollowupAsync(
-                "I couldn't post the link in this channel. Run `/issue-install` without `public` to get it for yourself.",
-                ephemeral: true);
-            return;
-        }
-
-        try
-        {
-            await DeleteOriginalResponseAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not delete the deferred /issue-install response.");
-            await FollowupAsync("Posted the link in this channel.", ephemeral: true);
-        }
+        if (isPublic)
+            await PostPubliclyAsync(card, "the link", "Run `/issue-install` without `public` to get it for yourself.");
+        else
+            await RespondAsync(components: card, ephemeral: true);
     }
+
+    /// <summary>
+    /// Posts a standing "Report an issue" button in the channel. Pressing it does exactly what <c>/issue</c>
+    /// does, for whoever pressed it: their apps, their rate limit, their modal (see <see cref="OnOpenReport"/>).
+    /// </summary>
+    [SlashCommand("issue-button", "Post a \"Report an issue\" button in this channel for everyone", runMode: RunMode.Sync)]
+    public Task IssueButton() =>
+        PostPubliclyAsync(OutcomeRenderer.RenderReportButton(), "the button", "Use `/issue` to report directly.");
 
     [SlashCommand("list-issues", "List open GitHub issues", runMode: RunMode.Sync)]
     public async Task ListIssues([Summary(description: AppOptionDescription)] string? app = null)
@@ -224,6 +199,15 @@ public class ReportInteractionModule(
     }
 
     // --- component handlers ---
+
+    /// <summary>
+    /// The public "Report an issue" button. Answered with the modal (or an ephemeral refusal), never through
+    /// <see cref="RunAsync"/>: its acknowledgement would replace the shared message for everyone, and a
+    /// modal must be the click's first response anyway.
+    /// </summary>
+    [ComponentInteraction(CustomIds.OpenReport, runMode: RunMode.Sync)]
+    public Task OnOpenReport() => OpenModalAsync();
+
     // The wildcard captures are declared because Discord.Net matches on them, but the custom id is
     // re-read through CustomIds.TryParse so that one validated codec decides what a click means.
 
@@ -335,8 +319,50 @@ public class ReportInteractionModule(
     }
 
     /// <summary>
+    /// Shows <paramref name="card"/> to everyone in the channel. Where the bot itself may post, it posts a
+    /// plain channel message and answers the interaction with nothing at all, so no "used /…" header hangs
+    /// over the card (decision 109). Anywhere else (a user install in a server the bot is not in, a group
+    /// DM, a channel it may not write to) a public reply is the only way left to show it.
+    /// </summary>
+    /// <param name="what">What was posted, for the caller's notes ("the link").</param>
+    /// <param name="alternative">What the caller can do instead when the post fails.</param>
+    private async Task PostPubliclyAsync(MessageComponent card, string what, string alternative)
+    {
+        if (PostableChannel() is not { } channel)
+        {
+            await RespondAsync(components: card);
+            return;
+        }
+
+        // Acknowledged first — the three-second deadline — then the deferred "thinking" note is deleted
+        // once the channel message is out, which leaves the bot's message as the only trace.
+        await DeferAsync(ephemeral: true);
+
+        try
+        {
+            await channel.SendMessageAsync(components: card, flags: MessageFlags.ComponentsV2);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not post {What} in channel {ChannelId}.", what, channel.Id);
+            await FollowupAsync($"I couldn't post {what} in this channel. {alternative}", ephemeral: true);
+            return;
+        }
+
+        try
+        {
+            await DeleteOriginalResponseAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not delete the deferred response after posting {What}.", what);
+            await FollowupAsync($"Posted {what} in this channel.", ephemeral: true);
+        }
+    }
+
+    /// <summary>
     /// The channel the command came from, when the bot itself may post there; otherwise null. Read from
-    /// the gateway cache only — <c>/issue-install</c> has three seconds — and the cache knows every server
+    /// the gateway cache only — the command has three seconds — and the cache knows every server
     /// the bot is in (the <c>Guilds</c> intent), which is exactly the question. A thread's permissions are
     /// its parent's, with "send in threads" in place of "send".
     /// </summary>
