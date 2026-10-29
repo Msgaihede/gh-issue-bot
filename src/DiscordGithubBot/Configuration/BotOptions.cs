@@ -5,6 +5,13 @@ namespace DiscordGithubBot.Configuration;
 public sealed class DiscordOptions
 {
     public string Token { get; set; } = "";
+
+    /// <summary>
+    /// The servers that get <c>/issue-install</c> and <c>/issue-button</c>, the commands that post for the
+    /// whole channel. They are registered per server, not globally, so nowhere else lists them — including
+    /// user installs. Empty means nowhere.
+    /// </summary>
+    public List<ulong> ShareCommandGuildIds { get; set; } = new();
 }
 
 /// <summary>

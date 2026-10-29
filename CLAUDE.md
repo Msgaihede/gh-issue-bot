@@ -72,7 +72,10 @@ for the OpenRouter/Jev redesign that supersedes its AI, dedup and command parts.
   the issue is created without it and `CodeContextFollowUp` edits it into
   the issue *body* later — never a comment (agents handed the issue read
   only the body).
-- Commands are global and user-installable: never rely on `Context.Guild`;
+- Commands are global and user-installable — except `ShareCommandModule`
+  (`/issue-install`, `/issue-button`), registered per server from
+  `Discord:ShareCommandGuildIds` only (decision 111); keep a new command out of
+  that module unless it too must stay off user installs. Never rely on `Context.Guild`;
   ask `AppAccess.ForAsync(Context.Interaction.GuildId, Context.User.Id)`. A
   configured server gets its own apps; anywhere else the user gets the apps
   of the configured servers they are in, checked over REST

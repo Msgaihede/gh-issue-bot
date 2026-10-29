@@ -197,15 +197,15 @@ starts from the right place:
 ## Slash commands
 
 - **`/issue`** — opens the report modal described above.
-- **`/issue-install [public]`** — an ephemeral message with an **Add to my
+- **`/issue-install [public]`** *(share servers only, see below)* — an
+  ephemeral message with an **Add to my
   account** button: the Discord link that installs the bot on the caller's own
   account. With `public: True` the link is for everyone in the channel: where
   the bot itself may post, it sends a plain channel message and leaves no
   interaction reply at all (no "used /issue-install" header, nothing for the
-  caller to clean up); where it can't — a user install in a server the bot
-  isn't in, a group DM, a channel it may not write to — it falls back to a
-  public reply.
-- **`/issue-button`** — posts a standing **Report an issue** button in the
+  caller to clean up); where it can't — a channel it may not write to — it
+  falls back to a public reply.
+- **`/issue-button`** *(share servers only)* — posts a standing **Report an issue** button in the
   channel, the same way `/issue-install public:True` posts its link (a plain
   bot message where the bot may post, a public reply elsewhere). Anyone who
   presses it gets exactly what `/issue` gives them: their own apps, rate limit
@@ -215,6 +215,13 @@ starts from the right place:
   titles with links, capped at 25 (and at what fits Discord's message size,
   whole lines only) with a "+K more on GitHub" note for the rest.
 
+`/issue-install` and `/issue-button` — the *share commands*, which post for
+the whole channel — are registered only in the servers listed in
+`Discord:ShareCommandGuildIds` (none by default), not globally: no other
+server lists them, and a user install does not carry them anywhere. The bot
+must be in each of those servers. A posted button keeps working wherever it
+is: its click is not a command (decision 111).
+
 `/issue` (and the **Report an issue** button) takes no options: with one reachable app the modal opens straight
 away, with several the modal asks which via a dropdown. `/list-issues` keeps an
 `app` option (it opens no modal to ask in), needed only when several apps are
@@ -222,7 +229,8 @@ reachable; an unknown name answers with the valid ones.
 
 ## Where the bot works (user install)
 
-Every command is registered **globally** and can be used in servers, in DMs
+Every command but the share commands (above) is registered **globally** and
+can be used in servers, in DMs
 with the bot, and in group DMs — both when the bot was added to a server and
 when a user added it to their own account. Which apps a command offers
 depends on where it was run:
@@ -398,7 +406,7 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
 
 ```json
 {
-  "Discord": { "Token": "<secret>" },
+  "Discord": { "Token": "<secret>", "ShareCommandGuildIds": [111111111111111111] },
   "OpenRouter": {
     "ApiKey": "<secret>",
     "ChatModel": "anthropic/claude-haiku-5.5",
@@ -422,6 +430,10 @@ checked-in defaults, and `.env.example` for the env-var form of every knob):
   ]
 }
 ```
+
+`Discord:ShareCommandGuildIds` lists the servers that get `/issue-install`
+and `/issue-button` (see "Slash commands"); empty or absent means no server
+does.
 
 `ChatProviders` and `IgnoredLabels` fall back to their
 defaults when absent; a configured list replaces the default rather than
@@ -662,15 +674,17 @@ configured app. Enable **User Install** in the Developer Portal first.
    just the "Also reported by …" line), and that nothing is announced.
 6. **Closed issues are ignored.** Close #N on GitHub and report the same bug a
    third time: it now goes straight to a draft preview.
-7. **User install.** Run `/issue-install`, press **Add to my account**, and
+7. **User install.** In a share server, run `/issue-install`, press **Add to my account**, and
    authorize. In a DM with a friend (or any server without the bot), `/issue`
    is available and offers only the apps of the configured servers you are
    in (a dropdown when that is several). The created issue's footer reads
    "via Discord". From an account in none of the configured servers,
    `/issue` answers that you're not in any of them instead of opening.
-   `/issue-install public:True` in a bot server's channel posts the link as a
-   plain bot message with no reply above it; in a server without the bot it
-   comes as a public reply instead.
+   `/issue-install public:True` in a share server's channel posts the link as a
+   plain bot message with no reply above it. Neither `/issue-install` nor
+   `/issue-button` is listed in a configured server outside
+   `Discord:ShareCommandGuildIds`, in a DM or in a server without the bot,
+   while `/issue` and `/list-issues` are.
    `/issue-button` behaves the same way and posts a **Report an issue**
    button; pressing it (from a second account too) opens the report modal,
    and the posted message itself stays unchanged.

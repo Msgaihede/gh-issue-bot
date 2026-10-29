@@ -1708,3 +1708,23 @@ below record the choices inside it that are not obvious from the code.
      away from everyone. The button carries no app: who presses it decides
      which apps are on offer, exactly as with `/issue`. Like
      `/issue-install`, anyone who can run commands may post it.
+
+## 2026-10-29 (share commands per server)
+
+111. **`/issue-install` and `/issue-button` are registered per server, not
+     globally.** The owner wanted the two commands that post for the whole
+     channel available only in servers they choose, with every other command
+     still everywhere. Amends decision 85 for those two: they moved to their
+     own `ShareCommandModule`, which `BotService` registers with
+     `AddModulesToGuildAsync` in each `Discord:ShareCommandGuildIds` server,
+     while every other module goes out globally. The module declares no
+     integration types or contexts — Discord reads those on global commands
+     only — so a user install never carries them. The list is a separate
+     setting rather than every app's `GuildIds`, because the servers that
+     report and the servers that may advertise the bot are the owner's call
+     apart; empty means nowhere, and a listed server need not host an app.
+     Configured app servers not on the list are still overwritten with an
+     empty set, as before. The button's click (`open-report`) stays a global
+     component handler: a posted button works for anyone who sees it. A
+     side effect: a user who never sees a share server cannot get the
+     install link from the bot any more.

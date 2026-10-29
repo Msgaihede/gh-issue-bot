@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace DiscordGithubBot.Discord;
 
 /// <summary>
-/// Owns the gateway connection: logs in, registers the slash commands with every configured guild and
+/// Owns the gateway connection: logs in, registers the slash commands (globally, plus the share commands per server) and
 /// hands each incoming interaction to the interaction framework. It is the only place that knows about
 /// service lifetimes — every interaction runs inside its own DI scope, because the pipeline and the
 /// database context it uses are scoped services.
@@ -67,18 +67,23 @@ public sealed class BotService(
 
     /// <summary>
     /// Commands are registered <em>globally</em>: a user-installed command belongs to no server, and
-    /// per-server registration cannot reach a user's DMs or the servers they carry the bot into. The
-    /// per-guild registrations of earlier versions are overwritten with nothing, or every configured
-    /// server would list each command twice. Both steps overwrite, so a reconnect simply repeats them.
+    /// per-server registration cannot reach a user's DMs or the servers they carry the bot into. The one
+    /// exception is <see cref="ShareCommandModule"/>, registered only in the servers that asked for it
+    /// (decision 111). Every other configured server is overwritten with nothing — the per-guild
+    /// registrations of earlier versions would otherwise list each command twice. Every step overwrites,
+    /// so a reconnect simply repeats them.
     /// </summary>
     private async Task OnReadyAsync()
     {
         logger.LogInformation("Connected to Discord as {User} ({UserId}), in {Guilds} server(s).",
             client.CurrentUser?.Username, client.CurrentUser?.Id, client.Guilds.Count);
 
+        var shareModule = interactions.GetModuleInfo<ShareCommandModule>();
+
         try
         {
-            await interactions.RegisterCommandsGloballyAsync(deleteMissing: true);
+            await interactions.AddModulesGloballyAsync(
+                deleteMissing: true, [.. interactions.Modules.Where(m => m != shareModule)]);
             logger.LogInformation("Slash commands registered globally.");
         }
         catch (Exception ex)
@@ -86,17 +91,39 @@ public sealed class BotService(
             logger.LogError(ex, "Failed to register the global slash commands.");
         }
 
-        foreach (var guildId in options.Apps.SelectMany(a => a.GuildIds).Distinct())
+        foreach (var (guildId, withShareCommands) in GuildRegistrations(options))
         {
             try
             {
-                await client.Rest.BulkOverwriteGuildCommands([], guildId);
+                if (withShareCommands)
+                {
+                    await interactions.AddModulesToGuildAsync(guildId, deleteMissing: true, shareModule);
+                    logger.LogInformation("Share commands registered in guild {GuildId}.", guildId);
+                }
+                else
+                {
+                    await client.Rest.BulkOverwriteGuildCommands([], guildId);
+                }
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Could not clear legacy per-server commands in guild {GuildId}.", guildId);
+                // Discord answers "Missing Access" for a server the bot is not in.
+                logger.LogWarning(ex, "Could not register the per-server commands in guild {GuildId}.", guildId);
             }
         }
+    }
+
+    /// <summary>
+    /// Every server whose per-server commands the bot owns, and whether it gets the share commands: the
+    /// <c>Discord:ShareCommandGuildIds</c> servers do, every other configured app server is cleared.
+    /// </summary>
+    public static IReadOnlyList<(ulong GuildId, bool WithShareCommands)> GuildRegistrations(BotOptions options)
+    {
+        var share = options.Discord.ShareCommandGuildIds.ToHashSet();
+        return share.Concat(options.Apps.SelectMany(a => a.GuildIds))
+            .Distinct()
+            .Select(id => (id, share.Contains(id)))
+            .ToList();
     }
 
     /// <summary>

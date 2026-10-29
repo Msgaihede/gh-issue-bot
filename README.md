@@ -20,7 +20,8 @@ they are most likely about. Every model call goes through
 
 - **One command, user-installable** — `/issue` opens a modal (description +
   up to 10 screenshots). The bot can be added to a server or to a user's own
-  Discord account (`/issue-install` hands out the link), so it works in any
+  Discord account (`/issue-install` hands out the link in the servers you
+  enable it for), so it works in any
   server, DM or group chat — outside a configured server, for the apps of the
   configured servers you are a member of.
 - **Jev decides** — bug vs feature, which of three drafted titles best
@@ -75,7 +76,8 @@ flowchart TD
 | Command | What it does |
 | --- | --- |
 | `/issue` | Report a bug or request a feature → deduplicated, labelled issue |
-| `/issue-install [public]` | Link to add the bot to your own Discord account (`public` posts it for the whole channel) |
+| `/issue-install [public]` | Link to add the bot to your own Discord account (`public` posts it for the whole channel); only in `Discord:ShareCommandGuildIds` servers |
+| `/issue-button` | Posts a **Report an issue** button anyone in the channel can press; only in `Discord:ShareCommandGuildIds` servers |
 | `/list-issues [app]` | Ephemeral list of the repo's open issues with links (capped at 25) |
 
 ## Getting started

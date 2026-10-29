@@ -18,7 +18,9 @@ namespace DiscordGithubBot.Tests.Discord;
 /// </summary>
 public class InteractionRoutingTests
 {
-    private static async Task<ModuleInfo> BuildModuleAsync()
+    private static Task<ModuleInfo> BuildModuleAsync() => BuildModuleAsync<ReportInteractionModule>();
+
+    private static async Task<ModuleInfo> BuildModuleAsync<TModule>() where TModule : class
     {
         using var client = new DiscordSocketClient();
         using var interactions = new InteractionService(client, BotService.CreateConfig());
@@ -35,18 +37,42 @@ public class InteractionRoutingTests
             .AddLogging()
             .BuildServiceProvider();
 
-        return await interactions.AddModuleAsync<ReportInteractionModule>(services);
+        return await interactions.AddModuleAsync<TModule>(services);
     }
 
     /// <summary>One reporting command; the decision model, not the reporter, decides bug or feature.</summary>
     [Fact]
-    public async Task Registers_the_report_command_the_install_link_the_report_button_and_the_issue_list()
+    public async Task Registers_the_report_command_and_the_issue_list_globally()
     {
         var module = await BuildModuleAsync();
 
-        Assert.Equal(
-            ["issue", "issue-button", "issue-install", "list-issues"],
-            module.SlashCommands.Select(c => c.Name).Order());
+        Assert.Equal(["issue", "list-issues"], module.SlashCommands.Select(c => c.Name).Order());
+    }
+
+    /// <summary>The commands that post for the whole channel live apart, so they can be registered per server.</summary>
+    [Fact]
+    public async Task The_install_link_and_the_report_button_are_the_share_commands()
+    {
+        var module = await BuildModuleAsync<ShareCommandModule>();
+
+        Assert.Equal(["issue-button", "issue-install"], module.SlashCommands.Select(c => c.Name).Order());
+    }
+
+    /// <summary>
+    /// The share commands are registered per server only; a user install must not carry them anywhere
+    /// else, so they declare no user integration type (and no DM contexts, which Discord ignores on
+    /// server commands anyway).
+    /// </summary>
+    [Fact]
+    public async Task The_share_commands_are_not_user_installable()
+    {
+        var module = await BuildModuleAsync<ShareCommandModule>();
+
+        Assert.All(module.SlashCommands, command =>
+        {
+            Assert.DoesNotContain(ApplicationIntegrationType.UserInstall, command.IntegrationTypes ?? []);
+            Assert.DoesNotContain(InteractionContextType.BotDm, command.ContextTypes ?? []);
+        });
     }
 
     /// <summary>
@@ -73,7 +99,7 @@ public class InteractionRoutingTests
     [Fact]
     public async Task The_install_command_is_private_unless_asked_to_be_public()
     {
-        var module = await BuildModuleAsync();
+        var module = await BuildModuleAsync<ShareCommandModule>();
 
         var install = module.SlashCommands.Single(c => c.Name == "issue-install");
         var parameter = Assert.Single(install.Parameters);
@@ -95,7 +121,7 @@ public class InteractionRoutingTests
     [Fact]
     public async Task The_report_button_command_takes_no_options()
     {
-        var module = await BuildModuleAsync();
+        var module = await BuildModuleAsync<ShareCommandModule>();
 
         Assert.Empty(module.SlashCommands.Single(c => c.Name == "issue-button").Parameters);
     }
